@@ -22,6 +22,7 @@ class FileEvaluatorAgent:
         """
         try:
             from agents.claude_jupyter_agent import ClaudeJupyterAgent
+            from agents.claude_subprocess_agent import ClaudeSubprocessAgent
         except ImportError:
             # Fallback if not in path, try adding project root
             import sys
@@ -33,7 +34,7 @@ class FileEvaluatorAgent:
 
         # Initialize the agent
         # We use a dummy data_root_path as we provide absolute paths for files
-        agent = ClaudeJupyterAgent(
+        agent = ClaudeSubprocessAgent(
             api_key=self.api_key,
             base_url=self.base_url,
             model_name=self.model_name,
@@ -42,7 +43,7 @@ class FileEvaluatorAgent:
         
         # Initialize toolkit for this evaluation session
         # Use a unique namespace/session to avoid conflicts
-        toolkit = CodeExecutionToolkit(sandbox="jupyter", namespace="evaluator", default_session_id=f"eval_{time.time()}")
+        toolkit = CodeExecutionToolkit(sandbox="subprocess", namespace="evaluator", default_session_id=f"eval_{time.time()}")
         run_code_func = toolkit.get_tools()[0]
         
         system_prompt = f"""你是一个智能文件评估员。
