@@ -33,7 +33,7 @@ def main():
     parser.add_argument("--data_path", help="Optional specific data path")
     parser.add_argument("--prompt_file", help="Name of the prompt file in infer/prompts/ or absolute path")
     parser.add_argument("--need_info", action="store_true", help="Enable file info enhancement (default: False)")
-    parser.add_argument("--agent_type", default="openai_jupyter_agent", help="Agent type to use (default: openai_jupyter_agent)")
+    parser.add_argument("--agent_type", default="openai_jupyter_agent", help="Agent type to use. Choices: openai_jupyter_agent, openai_subprocess_agent, claude_jupyter_agent, claude_subprocess_agent. (default: openai_jupyter_agent)")
 
     # Capture all arguments
     args = parser.parse_args()

@@ -11,12 +11,16 @@ from infer.framework import InferenceRunner
 try:
     from agents.openai_jupyter_agent import OpenAIJupyterAgent
     from agents.claude_jupyter_agent import ClaudeJupyterAgent
+    from agents.openai_subprocess_agent import OpenAISubporcessAgent
+    from agents.claude_subprocess_agent import ClaudeSubprocessAgent
     # Helpers for process_row
     from toolkits import CodeExecutionToolkit, generate_file_info_string, extract_workbook_summary3b
     from infer.dataset_info import DATASET_INFO
 except ImportError:
     print("Warning: Could not import OpenAIJupyterAgent or Evaluation Toolkit. Ensure dependencies are met.")
     OpenAIJupyterAgent = None
+    OpenAISubporcessAgent = None
+    ClaudeSubprocessAgent = None
     CodeExecutionToolkit = None
     generate_file_info_string = None
     extract_workbook_summary3b = None
@@ -83,7 +87,13 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
     # 3. Initialize Code Execution Toolkit (Persistent Session per Task)
     toolkit = None
     if CodeExecutionToolkit:
-        toolkit = CodeExecutionToolkit(sandbox="jupyter", namespace=f"task_{task_id}", timeout=30)
+        sandbox_type = "jupyter"
+        if OpenAISubporcessAgent and isinstance(agent, OpenAISubporcessAgent):
+             sandbox_type = "subprocess"
+        if ClaudeSubprocessAgent and isinstance(agent, ClaudeSubprocessAgent):
+             sandbox_type = "subprocess"
+        
+        toolkit = CodeExecutionToolkit(sandbox=sandbox_type, namespace=f"task_{task_id}", timeout=30)
         run_code = toolkit.get_tools()[0] # execute_code function tool
     else:
             def run_code(code, **kwargs): return "Execution Environment Not Available"
@@ -181,12 +191,20 @@ def run(args):
         if rel_root:
             agent_data_root = os.path.join(args.data_root, rel_root)
             
-    if hasattr(args, 'agent_type') and args.agent_type == 'claude_jupyter_agent':
-        agent_class = ClaudeJupyterAgent
-        print(f"Using Agent: ClaudeJupyterAgent")
-    else:
-        agent_class = OpenAIJupyterAgent
-        print(f"Using Agent: OpenAIJupyterAgent")
+    agent_class = OpenAIJupyterAgent
+    if hasattr(args, 'agent_type'):
+        if 'jupyter' in args.agent_type:
+            if args.agent_type == 'claude_jupyter_agent':
+                agent_class = ClaudeJupyterAgent
+            else:
+                agent_class = OpenAIJupyterAgent
+        else:
+            if args.agent_type == 'claude_subprocess_agent':
+                agent_class = ClaudeSubprocessAgent
+            else:
+                agent_class = OpenAISubporcessAgent
+            
+    print(f"Using Agent: {agent_class.__name__}")
 
     agent = agent_class(
         api_key=args.api_key,

@@ -9,3 +9,4 @@ note.txt
 test.py
 __pycache__/
 *.pyc
+output/
