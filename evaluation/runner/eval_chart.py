@@ -148,6 +148,8 @@ def run(args):
     
     results = []
     total_score = 0
+    total_correctness_score = 0
+    total_visual_score = 0
     total_items = 0
     
     print(f"Starting evaluation...")
@@ -177,30 +179,39 @@ def run(args):
                         # Support old format (eval_score) and new format (correctness.score)
                         # Note: Now total_score sums up the normalized scores (0-1)
                         # Now total_score is based on the weighted total score 'score' field
-                        if 'score' in existing_result:
-                            score = float(existing_result['score'])
-                        elif 'correctness' in existing_result:
-                            # Backward compatibility if weighted score wasn't saved but parts were
-                            # Use the pre-calculated normalized score if available
+                        
+                        # Extract component scores
+                        c_score = 0
+                        v_score = 0
+                        
+                        if 'correctness' in existing_result:
                             if 'score' in existing_result['correctness']:
                                 c_score = float(existing_result['correctness']['score'])
                             else:
                                 ck = int(existing_result['correctness'].get('correct_keypoints', 0))
                                 tk = int(existing_result['correctness'].get('total_keypoints', 3))
                                 c_score = (ck / tk) if tk > 0 else 0
-                                
-                            v_score = 0
-                            if 'visual' in existing_result and 'score' in existing_result['visual']:
-                                v_score = float(existing_result['visual']['score'])
-                                
+                        
+                        if 'visual' in existing_result and 'score' in existing_result['visual']:
+                            v_score = float(existing_result['visual']['score'])
+
+                        if 'score' in existing_result:
+                            score = float(existing_result['score'])
+                        elif 'correctness' in existing_result:
+                            # Backward compatibility if weighted score wasn't saved but parts were
+                            # Use the pre-calculated normalized score if available
                             score = round(v_score * 0.3 + c_score * 0.7, 2)
                         else:
                             # Old format was just integer score (maybe needs normalization? Assuming old score was 0/1 binary or count)
                             # If old score was just "pass/fail" (0 or 1), it is already normalized.
                             # If it was a count, we might be mixing scales. Assuming old eval was binary or we accept inconsistency for old data.
                             score = float(existing_result.get('eval_score', 0))
+                            # For old format, assume correctness is the score and visual is 0? Or just leave them 0.
+                            c_score = score
                             
                         total_score += score
+                        total_correctness_score += c_score
+                        total_visual_score += v_score
                         total_items += 1
                     except:
                         pass
@@ -220,25 +231,33 @@ def run(args):
                     results.append(row)
                     
                     try:
-                        # Use the weighted total score 'score'
-                        if 'score' in row:
-                            score = float(row['score'])
-                        elif 'correctness' in row:
+                        # Extract component scores
+                        c_score = 0
+                        v_score = 0
+                        
+                        if 'correctness' in row:
                             if 'score' in row['correctness']:
                                 c_score = float(row['correctness']['score'])
                             else:
                                 ck = int(row['correctness'].get('correct_keypoints', 0))
                                 tk = int(row['correctness'].get('total_keypoints', 3))
                                 c_score = (ck / tk) if tk > 0 else 0
-                            
-                            v_score = 0
-                            if 'visual' in row and 'score' in row['visual']:
-                                v_score = float(row['visual']['score'])
-                                
+                        
+                        if 'visual' in row and 'score' in row['visual']:
+                            v_score = float(row['visual']['score'])
+
+                        # Use the weighted total score 'score'
+                        if 'score' in row:
+                            score = float(row['score'])
+                        elif 'correctness' in row:
                             score = round(v_score * 0.3 + c_score * 0.7, 2)
                         else:
                             score = float(row.get('eval_score', 0))
+                            c_score = score
+                            
                         total_score += score
+                        total_correctness_score += c_score
+                        total_visual_score += v_score
                         total_items += 1 
                     except:
                         pass
@@ -253,11 +272,15 @@ def run(args):
     # Calculate score based on total items in dataset (treating failures/skips as 0)
     dataset_size = len(data)
     avg_score = (total_score / dataset_size) if dataset_size > 0 else 0
+    avg_correctness = (total_correctness_score / dataset_size) if dataset_size > 0 else 0
+    avg_visual = (total_visual_score / dataset_size) if dataset_size > 0 else 0
     
     summary = {
         "total_items": dataset_size,
         "total_score": total_score,
-        "score": round(avg_score, 2)
+        "score": round(avg_score, 2),
+        "correctness_score": round(avg_correctness, 2),
+        "visual_score": round(avg_visual, 2)
     }
     with open(summary_path, 'w', encoding='utf-8') as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
@@ -266,6 +289,8 @@ def run(args):
     print(f"Total Items: {dataset_size}")
     print(f"Total Score: {total_score}")
     print(f"Score: {avg_score:.2f}")
+    print(f"Correctness Score: {avg_correctness:.2f}")
+    print(f"Visual (Readability) Score: {avg_visual:.2f}")
 
 if __name__ == "__main__":
     pass
