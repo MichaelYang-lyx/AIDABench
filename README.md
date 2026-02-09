@@ -73,31 +73,7 @@
     - `numerical/`
     - `editing/`
 
-## 新增工具脚本
-
-### 1. 数据转换工具 (Excel -> JSONL)
-
-位于 `transfer_data/xlsx_to_jsonl.py`。
-用于将 XLSX 表格转换为 JSONL 格式。
-**使用方法**：
-修改脚本内的 `input_path` 和 `output_path` 参数，然后运行：
-
-```bash
-uv run python transfer_data/xlsx_to_jsonl.py
-```
-
-### 2. 文件筛选与复制工具
-
-位于 `some_functions/select_data/copy_selected_files.py`。
-用于根据总表（Excel 或 JSONL）中的文件路径信息，将源文件复制到目标目录。支持多种分隔符（换行、分号、空格等）。
-**使用方法**：
-修改脚本内的参数（如 `master_table_path`, `output_base_dir` 等），然后运行：
-
-```bash
-uv run python some_functions/select_data/copy_selected_files.py
-```
-
-### 3. 并行推理框架
+### 2. 并行推理框架
 
 位于 `infer/` 目录。
 
