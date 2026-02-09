@@ -2,6 +2,7 @@ import argparse
 import subprocess
 import sys
 import os
+import json
 from pathlib import Path
 
 # Ensure project root is in sys.path so we can import 'infer' as a package
@@ -17,6 +18,38 @@ def get_sys_msg(sys_msg_path, task):
     sys_msg = p.read_text(encoding="utf-8")
     sys_msg = sys_msg.replace('{task_prompt}', task)
     return sys_msg
+
+def check_and_clean_failed_preds(output_dir):
+    """
+    Check all json files in output_dir.
+    If 'model_response' contains '502 Bad Gateway', delete the file.
+    """
+    if not os.path.exists(output_dir):
+        return
+
+    print(f"Checking for failed predictions in {output_dir}...")
+    removed_count = 0
+    # Walk through the directory (though runners usually put files directly in output_dir)
+    # We'll just check the top level files in output_dir as per runner behavior
+    for filename in os.listdir(output_dir):
+        if filename.endswith(".json"):
+            file_path = os.path.join(output_dir, filename)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                model_response = data.get("model_response", "")
+                if "502 Bad Gateway" in str(model_response):
+                    print(f"Removing failed prediction (502 Bad Gateway): {file_path}")
+                    os.remove(file_path)
+                    removed_count += 1
+            except Exception as e:
+                # If json is broken, we might want to keep it or ignore it. 
+                # For now, just print error.
+                print(f"Error checking file {file_path}: {e}")
+    
+    if removed_count > 0:
+        print(f"Removed {removed_count} failed prediction files.")
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Entry Point for OfficeBench Inference")
@@ -59,6 +92,16 @@ def main():
         current_args.dataset = ds_name
         
         print(f"\n>>> Starting task for dataset: {ds_name}")
+
+        # Pre-processing: Check and clean failed predictions
+        # Construct the expected output path to check for existing failed results
+        if current_args.output_path:
+            output_path_to_check = os.path.abspath(current_args.output_path)
+        else:
+            save_name = getattr(current_args, 'save_name', None) or current_args.model_name
+            output_path_to_check = os.path.abspath(os.path.join("output", "preds", save_name, ds_name, "conv"))
+        
+        check_and_clean_failed_preds(output_path_to_check)
 
         # Dispatch Logic
         if "chart" in ds_lower:
