@@ -1,0 +1,20 @@
+
+Total Items: 57
+Total Score: 38.650000000000006
+Score: 0.68
+
+Evaluation Complete.
+Total Items: 57
+Total Score: 37.61
+Score: 0.66
+
+Total Items: 57
+Total Score: 36.11000000000002
+Score: 0.63
+
+
+Total Items: 57
+Total Score: 37.91000000000001
+Score: 0.67
+
+dsv3

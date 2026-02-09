@@ -90,7 +90,7 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
              info2_str = "\n".join(all_info2)
              new_system_text = f"[\"{sys_content}\",\"{'所有文件描述:'+info1_str}\",\"{'所有文件摘要:'+info2_str}\"]"
              sys_content = new_system_text
-    
+
     # 3. Initialize Code Execution Toolkit (Persistent Session per Task)
     toolkit = None
     if CodeExecutionToolkit:
@@ -130,7 +130,7 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
             
             # Also append instruction to question to inform the agent
             # question = f"{question}\n\n 如果需要保存生成的文件，请保存到: /mnt/output"
-
+        question = question + '\n【注意：请最后仅仅用文本回答我的问题，不需要生成任何文件。】'
         interaction_result = agent.interact(query=question, system_prompt=sys_content, run_code_func=run_code, path_info=path_info)
         
         # 5. Prepare Result

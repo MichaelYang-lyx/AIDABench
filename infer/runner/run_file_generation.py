@@ -68,13 +68,14 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
             
             if os.path.exists(real_file_path):
                 try:
+                    real_file_path_list.append(real_file_path)
                     if need_info and generate_file_info_string:
                         info1 = generate_file_info_string(real_file_path)
                         info2 = extract_workbook_summary3b(real_file_path)
                         
                         all_info1.append(f"文件 {fname} 描述: {info1}")
                         all_info2.append(f"文件 {fname} 摘要: {info2}")
-                        real_file_path_list.append(real_file_path)
+                        
                 except Exception as e:
                     print(f"Error generating file info for {fname}: {e}")
         
@@ -121,7 +122,6 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
 
         path_info['real_output_dir'] = generated_files_path
         path_info['mnt_output_dir'] = mnt_dir_result_path
-
         output_files_str = row.get('output_file', '')
         if output_files_str:
             file_out_paths_str = ", ".join([os.path.join(mnt_dir_result_path, os.path.basename(f)) for f in output_files_str.split('\n') if f.strip()])
