@@ -3,12 +3,12 @@
     "kind": "chart",
     "jsonl": "./all_data/chart/chart.jsonl",
     "input_stat": {
-      "total": 120,
-      "ok": 120
+      "total": 156,
+      "ok": 156
     },
     "output_stat": {
-      "total": 95,
-      "ok": 95
+      "total": 123,
+      "ok": 123
     },
     "missing_json": "./all_data/chart/missing_files.json"
   },
@@ -16,12 +16,12 @@
     "kind": "file_generation",
     "jsonl": "./all_data/file_generation/file_generation.jsonl",
     "input_stat": {
-      "total": 418,
-      "ok": 418
+      "total": 504,
+      "ok": 504
     },
     "output_stat": {
-      "total": 279,
-      "ok": 279
+      "total": 314,
+      "ok": 314
     },
     "missing_json": "./all_data/file_generation/missing_files.json"
   },
@@ -29,8 +29,8 @@
     "kind": "numeric",
     "jsonl": "./all_data/numeric/numeric.jsonl",
     "input_stat": {
-      "total": 267,
-      "ok": 267
+      "total": 313,
+      "ok": 313
     },
     "output_stat": {
       "total": 0,
