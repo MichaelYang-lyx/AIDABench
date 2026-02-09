@@ -1,5 +1,0 @@
-Total Items: 90
-Total Score: 56.169999999999995
-Score: 0.62
-Correctness Score: 0.61
-Visual (Readability) Score: 0.66
