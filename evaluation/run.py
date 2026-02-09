@@ -144,6 +144,27 @@ def main():
                 if 'score' in local_summary:
                     model_entry['numeric_score'] = round(float(local_summary['score']), 4)
             
+            # Reorder keys in model_entry
+            ordered_keys = [
+                "numeric_score",
+                "chart_correctness_score",
+                "chart_readability_score",
+                "file_generation_score"
+            ]
+            
+            new_model_entry = {}
+            # Add known keys in order
+            for key in ordered_keys:
+                if key in model_entry:
+                    new_model_entry[key] = model_entry[key]
+            
+            # Add any other keys that might exist
+            for key in model_entry:
+                if key not in ordered_keys:
+                    new_model_entry[key] = model_entry[key]
+            
+            central_data[args.model_name] = new_model_entry
+
             # Save back
             with open(central_summary_path, 'w', encoding='utf-8') as f:
                 json.dump(central_data, f, ensure_ascii=False, indent=2)
