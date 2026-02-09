@@ -80,7 +80,7 @@ class OpenAIJupyterAgent:
         # Interaction Loop
         while True:
             round_count += 1
-            if round_count > 40:
+            if round_count > 20:
                 final_response = "Error: Too many rounds reached."
                 break
             
