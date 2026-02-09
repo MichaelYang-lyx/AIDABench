@@ -169,6 +169,27 @@ def run(args):
             except Exception as e:
                 print(f"Error processing row: {e}")
                 
-    # Also save merged results just in case
-    # pd.DataFrame(results).to_json(args.output_path + ".jsonl", orient='records', lines=True, force_ascii=False)
+    # Calculate summary stats
+    total_score = 0
+    total_items = 0
+    for res in results:
+        total_score += res.get('eval_score', 0)
+        total_items += 1
+        
+    dataset_size = len(data) # Should use original dataset size or results size? Using data size is safer for completion rate.
+    avg_score = (total_score / dataset_size) if dataset_size > 0 else 0
+    
+    summary_path = os.path.join(args.output_path, "summary.json")
+    summary = {
+        "total_items": dataset_size,
+        "total_score": total_score,
+        "score": round(avg_score, 4)
+    }
+    
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
     print(f"Evaluation finished. Results saved to {args.output_path}")
+    print(f"Total Items: {dataset_size}")
+    print(f"Total Score: {total_score}")
+    print(f"Score: {avg_score:.4f}")

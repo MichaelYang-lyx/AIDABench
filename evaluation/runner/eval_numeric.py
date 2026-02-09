@@ -124,7 +124,7 @@ def run(args):
     summary = {
         "total_items": dataset_size,
         "total_score": total_score,
-        "score": round(avg_score, 2)
+        "score": round(avg_score, 4)
     }
     with open(summary_path, 'w', encoding='utf-8') as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
@@ -132,7 +132,7 @@ def run(args):
     print(f"Evaluation Complete.")
     print(f"Total Items: {dataset_size}")
     print(f"Total Score: {total_score}")
-    print(f"Score: {avg_score:.2f}")
+    print(f"Score: {avg_score:.4f}")
 
 if __name__ == "__main__":
     pass

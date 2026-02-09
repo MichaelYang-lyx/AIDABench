@@ -1,6 +1,7 @@
 import argparse
 import sys
 import os
+import json
 
 # Add project root
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -105,6 +106,52 @@ def main():
     else:
         print(f"Dataset '{dataset}' not supported for evaluation yet.")
         sys.exit(1)
+
+    # Central Summary Update
+    summary_file_path = os.path.join(args.output_path, "summary.json")
+    if os.path.exists(summary_file_path):
+        try:
+            with open(summary_file_path, 'r', encoding='utf-8') as f:
+                local_summary = json.load(f)
+            
+            central_summary_path = os.path.join(project_root, "output", "evals", "summary.json")
+            os.makedirs(os.path.dirname(central_summary_path), exist_ok=True)
+            
+            central_data = {}
+            if os.path.exists(central_summary_path):
+                try:
+                    with open(central_summary_path, 'r', encoding='utf-8') as f:
+                        central_data = json.load(f)
+                except:
+                    pass
+            
+            if args.model_name not in central_data:
+                central_data[args.model_name] = {}
+                
+            model_entry = central_data[args.model_name]
+            
+            if "chart" in dataset:
+                if 'correctness_score' in local_summary:
+                    model_entry['chart_correctness_score'] = round(float(local_summary['correctness_score']), 4)
+                if 'visual_score' in local_summary:
+                    model_entry['chart_readability_score'] = round(float(local_summary['visual_score']), 4)
+                
+            elif "file" in dataset: # file_generation
+                if 'score' in local_summary:
+                    model_entry['file_generation_score'] = round(float(local_summary['score']), 4)
+                    
+            elif "numeric" in dataset:
+                if 'score' in local_summary:
+                    model_entry['numeric_score'] = round(float(local_summary['score']), 4)
+            
+            # Save back
+            with open(central_summary_path, 'w', encoding='utf-8') as f:
+                json.dump(central_data, f, ensure_ascii=False, indent=2)
+                
+            print(f"Updated central summary at {central_summary_path}")
+            
+        except Exception as e:
+            print(f"Error updating central summary: {e}")
 
 if __name__ == "__main__":
     main()
