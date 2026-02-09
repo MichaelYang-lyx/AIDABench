@@ -14,21 +14,22 @@ from evaluation.utils import load_dataset
 from evaluation.config import FILE_GENERATION_EVAL_API_KEY, FILE_GENERATION_EVAL_API_URL, FILE_GENERATION_EVAL_MODEL_NAME
 
 def process_single_row(row, i, args, evaluator):
+    
     # Remove large fields
     row.pop('history', None)
     # row.pop('model_response', None) # Might be useful for debugging
     
-    output_path_str = row.get('output_path', '')
+    output_path_str = row.get('output_file', '')
     if not output_path_str:
         row['eval_score'] = 0
-        row['eval_reason'] = "No output_path in data"
+        row['eval_reason'] = "No output_file in data"
         return row
-
+    
     # Assuming first output file is the one to evaluate
     first_output_path = output_path_str.split('\n')[0].strip()
     if not first_output_path:
         row['eval_score'] = 0
-        row['eval_reason'] = "Empty output_path"
+        row['eval_reason'] = "Empty output_file"
         return row
     
     generated_file_path = first_output_path
@@ -45,7 +46,8 @@ def process_single_row(row, i, args, evaluator):
          return row
 
     # Reference File
-    reference_path = row.get('reference', row.get('ground_truth_files', row.get('ground_truth', '')))
+    breakpoint()
+    reference_path = row.get('reference', row.get('ground_truth_files', row.get('reference_file', '')))
     if isinstance(reference_path, list):
         if reference_path:
             reference_path = reference_path[0]
@@ -56,7 +58,7 @@ def process_single_row(row, i, args, evaluator):
         row['eval_score'] = 0
         row['eval_reason'] = "No reference file specified"
         return row
-        
+    
     # Check if reference file exists
     if not os.path.isabs(reference_path) and hasattr(args, 'data_root') and args.data_root:
         # Try multiple locations
@@ -148,6 +150,7 @@ def run(args):
         for i, row in enumerate(data):
             # Check if result already exists (Resume capability)
             result_path = get_result_file_path(row, i, args)
+            
             if os.path.exists(result_path):
                 try:
                     with open(result_path, 'r', encoding='utf-8') as f:
