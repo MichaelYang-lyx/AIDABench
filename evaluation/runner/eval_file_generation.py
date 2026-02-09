@@ -46,7 +46,7 @@ def process_single_row(row, i, args, evaluator):
          return row
 
     # Reference File
-    breakpoint()
+    
     reference_path = row.get('reference', row.get('ground_truth_files', row.get('reference_file', '')))
     if isinstance(reference_path, list):
         if reference_path:
