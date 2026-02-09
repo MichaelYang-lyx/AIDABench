@@ -1,0 +1,11 @@
+.env
+test/
+.venv/
+some_functions/
+data_old/
+uv.lock
+.DS_Store
+note.txt
+test.py
+__pycache__/
+*.pyc

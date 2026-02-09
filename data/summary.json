@@ -1,0 +1,41 @@
+[
+  {
+    "kind": "chart",
+    "jsonl": "./all_data/chart/chart.jsonl",
+    "input_stat": {
+      "total": 80,
+      "ok": 80
+    },
+    "output_stat": {
+      "total": 61,
+      "ok": 61
+    },
+    "missing_json": "./all_data/chart/missing_files.json"
+  },
+  {
+    "kind": "file_generation",
+    "jsonl": "./all_data/file_generation/file_generation.jsonl",
+    "input_stat": {
+      "total": 274,
+      "ok": 274
+    },
+    "output_stat": {
+      "total": 199,
+      "ok": 199
+    },
+    "missing_json": "./all_data/file_generation/missing_files.json"
+  },
+  {
+    "kind": "numeric",
+    "jsonl": "./all_data/numeric/numeric.jsonl",
+    "input_stat": {
+      "total": 222,
+      "ok": 222
+    },
+    "output_stat": {
+      "total": 0,
+      "ok": 0
+    },
+    "missing_json": "./all_data/numeric/missing_files.json"
+  }
+]
