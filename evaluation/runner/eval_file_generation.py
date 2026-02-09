@@ -23,6 +23,7 @@ def process_single_row(row, i, args, evaluator):
     if not output_path_str:
         row['eval_score'] = 0
         row['eval_reason'] = "No output_file in data"
+        save_result(row, args, i)
         return row
     
     # Assuming first output file is the one to evaluate
@@ -30,6 +31,7 @@ def process_single_row(row, i, args, evaluator):
     if not first_output_path:
         row['eval_score'] = 0
         row['eval_reason'] = "Empty output_file"
+        save_result(row, args, i)
         return row
     
     generated_file_path = first_output_path
@@ -43,6 +45,7 @@ def process_single_row(row, i, args, evaluator):
     if not os.path.exists(generated_file_path):
          row['eval_score'] = 0
          row['eval_reason'] = f"Generated file not found: {generated_file_path}"
+         save_result(row, args, i)
          return row
 
     # Reference File
@@ -57,6 +60,7 @@ def process_single_row(row, i, args, evaluator):
     if not reference_path:
         row['eval_score'] = 0
         row['eval_reason'] = "No reference file specified"
+        save_result(row, args, i)
         return row
     
     # Check if reference file exists
@@ -79,10 +83,12 @@ def process_single_row(row, i, args, evaluator):
         if not found:
             row['eval_score'] = 0
             row['eval_reason'] = f"Reference file not found. Tried: {candidates}"
+            save_result(row, args, i)
             return row
     elif not os.path.exists(reference_path):
         row['eval_score'] = 0
         row['eval_reason'] = f"Reference file not found: {reference_path}"
+        save_result(row, args, i)
         return row
 
     question = row.get('question', '')
