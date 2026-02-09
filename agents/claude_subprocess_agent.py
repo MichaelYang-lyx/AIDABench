@@ -25,10 +25,11 @@ except ImportError:
         extract_workbook_summary3b = None
 
 class ClaudeSubprocessAgent:
-    def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str):
+    def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str, max_rounds: int = 20):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model_name = model_name
         self.data_root_path = data_root_path
+        self.max_rounds = max_rounds
         
         # Define the tools (OpenAI format)
         self.tools = [
@@ -89,7 +90,7 @@ class ClaudeSubprocessAgent:
         # Interaction Loop
         while True:
             round_count += 1
-            if round_count > 20:
+            if round_count > self.max_rounds:
                 final_response = "Error: Too many rounds reached."
                 break
             

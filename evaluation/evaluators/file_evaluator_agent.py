@@ -10,10 +10,11 @@ from openai import OpenAI
 from toolkits import CodeExecutionToolkit
 
 class FileEvaluatorAgent:
-    def __init__(self, api_key: str, base_url: str, model_name: str):
+    def __init__(self, api_key: str, base_url: str, model_name: str, max_rounds: int = 30):
         self.api_key = api_key
         self.base_url = base_url
         self.model_name = model_name
+        self.max_rounds = max_rounds
 
     def evaluate(self, question: str, reference_path: str, prediction_path: str) -> Dict[str, Any]:
         """
@@ -38,7 +39,8 @@ class FileEvaluatorAgent:
             api_key=self.api_key,
             base_url=self.base_url,
             model_name=self.model_name,
-            data_root_path="/tmp"
+            data_root_path="/tmp",
+            max_rounds=self.max_rounds
         )
         
         # Initialize toolkit for this evaluation session
