@@ -17,7 +17,7 @@ def process_single_row(row, i, args, evaluator):
     row.pop('history', None)
     row.pop('model_response', None)
     
-    output_path_str = row.get('output_path', '')
+    output_path_str = row.get('output_path') or row.get('output_file', '')
     if not output_path_str:
         # print(f"Skipping item {i}: No output_path defined.")
         row['eval_score'] = 0
@@ -34,7 +34,16 @@ def process_single_row(row, i, args, evaluator):
          return row
          
     image_filename = os.path.basename(first_output_path)
-    image_full_path = os.path.join(args.picture_dir, image_filename)
+    
+    # Try to find the image in task subdirectory first (as run_chart.py saves it there)
+    task_id = row.get('id', 'unknown')
+    image_full_path = os.path.join(args.picture_dir, str(task_id), image_filename)
+    
+    if not os.path.exists(image_full_path):
+        # Fallback to checking directly in picture_dir
+        image_full_path_fallback = os.path.join(args.picture_dir, image_filename)
+        if os.path.exists(image_full_path_fallback):
+            image_full_path = image_full_path_fallback
     
     # Prepare row for evaluator
     eval_row = row.copy()
