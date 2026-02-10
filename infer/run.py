@@ -89,7 +89,9 @@ def check_and_clean_failed_preds(output_dir):
                         if any(any(err in field for err in error_patterns) for field in fields_to_check):
                             print(f"Found failed eval (Error in reason/correctness): {filename}")
                             files_to_delete_eval.add(filename)
-                            files_to_delete_conv.add(filename)
+                            # If eval failed, we only delete eval file to let it re-run.
+                            # Inference file might be correct, so we keep it.
+                            # files_to_delete_conv.add(filename) 
                     except Exception:
                         pass
         except OSError:
