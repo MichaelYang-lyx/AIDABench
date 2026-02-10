@@ -10,3 +10,7 @@ test.py
 __pycache__/
 *.pyc
 output/
+run_claude.sh
+run_ds.sh
+run_gemini.sh
+run_qwen30.sh
