@@ -56,6 +56,9 @@ def process_single_row(row, i, args, evaluator):
             reference_path = reference_path[0]
         else:
             reference_path = ""
+    elif isinstance(reference_path, str):
+        if '\n' in reference_path:
+            reference_path = reference_path.split('\n')[0].strip()
             
     if not reference_path:
         row['eval_score'] = 0
