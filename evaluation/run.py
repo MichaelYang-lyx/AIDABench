@@ -52,6 +52,11 @@ def main():
         # Default to project_root
         args.data_root = project_root
 
+    # Print Banner
+    print("\n" + "="*40)
+    print(f" mode: eval     dataset: {dataset}")
+    print("="*40 + "\n")
+
     print(f"Evaluation Configuration:")
     print(f"  Dataset: {dataset}")
     print(f"  Model: {args.model_name}")

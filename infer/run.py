@@ -162,6 +162,11 @@ def main():
         current_args = argparse.Namespace(**vars(args))
         current_args.dataset = ds_name
         
+        # Print Banner
+        print("\n" + "="*40)
+        print(f" mode: infer    dataset: {ds_name}")
+        print("="*40 + "\n")
+
         print(f"\n>>> Starting task for dataset: {ds_name}")
 
         # Pre-processing: Check and clean failed predictions

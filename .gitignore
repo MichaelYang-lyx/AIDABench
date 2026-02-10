@@ -14,3 +14,4 @@ run_claude.sh
 run_ds.sh
 run_gemini.sh
 run_qwen30.sh
+run_qwenmax.sh
