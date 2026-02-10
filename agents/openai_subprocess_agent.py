@@ -53,12 +53,21 @@ class OpenAISubporcessAgent:
 
     def _get_response_openai(self, messages: List[Dict]):
         try:
+            # Determine actual model name and extra params for specific models
+            actual_model_name = self.model_name
+            extra_body_params = {}
+            
+            if self.model_name == "qwen3-max-2026-01-23-thinking":
+                actual_model_name = "qwen3-max-2026-01-23"
+                extra_body_params["enable_thinking"] = True
+
             response = self.client.chat.completions.create(
-                model=self.model_name,
+                model=actual_model_name,
                 messages=messages,
                 tools=self.tools,
                 tool_choice="auto",
                 temperature=0.0, # Deterministic
+                extra_body=extra_body_params if extra_body_params else None
             )
             return response.choices[0].message, response.usage.completion_tokens
         except Exception as e:

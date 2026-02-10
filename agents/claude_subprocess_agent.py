@@ -45,7 +45,7 @@ class ClaudeSubprocessAgent:
                     }
                 }
                 ]
-
+    
     def _get_response_openai(self, messages: List[Dict]):
         has_system = bool(messages) and messages[0].get("role") == "system"
         try:
