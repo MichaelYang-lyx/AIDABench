@@ -21,35 +21,106 @@ def get_sys_msg(sys_msg_path, task):
 
 def check_and_clean_failed_preds(output_dir):
     """
-    Check all json files in output_dir.
-    If 'model_response' contains '502 Bad Gateway', delete the file.
+    Check all json files in output_dir (inference results).
+    If 'model_response' contains '502 Bad Gateway' or 'Error code: 503', delete the file.
+    Also check corresponding evaluation files and delete them if inference is bad.
+    Additionally, check evaluation files for the same errors in 'reason'/'correctness',
+    and if found, delete both eval and inference files.
     """
     if not os.path.exists(output_dir):
         return
 
-    print(f"Checking for failed predictions in {output_dir}...")
-    removed_count = 0
-    # Walk through the directory (though runners usually put files directly in output_dir)
-    # We'll just check the top level files in output_dir as per runner behavior
-    for filename in os.listdir(output_dir):
-        if filename.endswith(".json"):
-            file_path = os.path.join(output_dir, filename)
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                model_response = data.get("model_response", "")
-                if "502 Bad Gateway" in str(model_response):
-                    print(f"Removing failed prediction (502 Bad Gateway): {file_path}")
-                    os.remove(file_path)
-                    removed_count += 1
-            except Exception as e:
-                # If json is broken, we might want to keep it or ignore it. 
-                # For now, just print error.
-                print(f"Error checking file {file_path}: {e}")
+    # Derive Eval Directory
+    # Convention: .../output/preds/{model}/{dataset}/conv -> .../output/evals/{model}/{dataset}
+    eval_dir = None
+    if "/preds/" in output_dir and output_dir.endswith("/conv"):
+        eval_dir = output_dir.replace("/preds/", "/evals/").replace("/conv", "")
     
-    if removed_count > 0:
-        print(f"Removed {removed_count} failed prediction files.")
+    print(f"Checking for failed predictions in {output_dir}...")
+    if eval_dir and os.path.exists(eval_dir):
+        print(f"Also checking corresponding eval files in {eval_dir}...")
+
+    error_patterns = ["502 Bad Gateway", "Error code: 503"]
+    
+    files_to_delete_conv = set()
+    files_to_delete_eval = set()
+
+    # 1. Scan Conv Files (Inference)
+    try:
+        for filename in os.listdir(output_dir):
+            if filename.endswith(".json"):
+                file_path = os.path.join(output_dir, filename)
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    model_response = str(data.get("model_response", ""))
+                    if any(err in model_response for err in error_patterns):
+                        print(f"Found failed inference (Error in model_response): {filename}")
+                        files_to_delete_conv.add(filename)
+                        files_to_delete_eval.add(filename)
+                except Exception:
+                    pass
+    except OSError:
+        pass
+
+    # 2. Scan Eval Files (Evaluation)
+    if eval_dir and os.path.exists(eval_dir):
+        try:
+            for filename in os.listdir(eval_dir):
+                if filename.endswith(".json"):
+                    file_path = os.path.join(eval_dir, filename)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        
+                        # Gather fields to check
+                        fields_to_check = []
+                        fields_to_check.append(str(data.get("reason", "")))
+                        fields_to_check.append(str(data.get("eval_reason", "")))
+                        
+                        # Handle chart correctness (dict or str)
+                        corr = data.get("correctness")
+                        if isinstance(corr, dict):
+                            fields_to_check.append(str(corr.get("reason", "")))
+                        else:
+                            fields_to_check.append(str(corr))
+
+                        if any(any(err in field for err in error_patterns) for field in fields_to_check):
+                            print(f"Found failed eval (Error in reason/correctness): {filename}")
+                            files_to_delete_eval.add(filename)
+                            files_to_delete_conv.add(filename)
+                    except Exception:
+                        pass
+        except OSError:
+            pass
+
+    # 3. Perform Deletion
+    count_conv = 0
+    for fname in files_to_delete_conv:
+        p = os.path.join(output_dir, fname)
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+                count_conv += 1
+                print(f"Deleted inference file: {p}")
+            except OSError as e:
+                print(f"Error deleting {p}: {e}")
+    
+    count_eval = 0
+    if eval_dir and os.path.exists(eval_dir):
+        for fname in files_to_delete_eval:
+            p = os.path.join(eval_dir, fname)
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                    count_eval += 1
+                    print(f"Deleted eval file: {p}")
+                except OSError as e:
+                    print(f"Error deleting {p}: {e}")
+
+    if count_conv > 0 or count_eval > 0:
+        print(f"Cleanup finished. Removed {count_conv} inference files and {count_eval} eval files.")
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Entry Point for OfficeBench Inference")
