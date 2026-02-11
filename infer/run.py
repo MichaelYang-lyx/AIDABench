@@ -40,7 +40,7 @@ def check_and_clean_failed_preds(output_dir):
     if eval_dir and os.path.exists(eval_dir):
         print(f"Also checking corresponding eval files in {eval_dir}...")
 
-    error_patterns = ["ClaudeSubprocessAgent","claude_subprocess_agent.py","Error code: 429","502 Bad Gateway", "Error code: 503", "engine is currently overloaded"]
+    error_patterns = ["Request timed out","ClaudeSubprocessAgent","claude_subprocess_agent.py","Error code: 429","502 Bad Gateway", "Error code: 503", "engine is currently overloaded"]
     
     files_to_delete_conv = set()
     files_to_delete_eval = set()
