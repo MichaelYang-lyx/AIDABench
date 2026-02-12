@@ -52,6 +52,20 @@ def main():
         # Default to project_root
         args.data_root = project_root
 
+    # Pre-check and clean failed predictions/evaluations
+    # This ensures that if we are re-running, we don't skip failed items from previous runs
+    try:
+        from infer.run import check_and_clean_failed_preds
+        # args.input_path is the inference directory (e.g., .../conv)
+        # This function will check inference files AND corresponding eval files
+        if os.path.exists(args.input_path):
+            print(f"Running pre-evaluation cleanup on {args.input_path}...")
+            check_and_clean_failed_preds(args.input_path)
+    except ImportError:
+        print("Warning: Could not import check_and_clean_failed_preds from infer.run. Skipping cleanup.")
+    except Exception as e:
+        print(f"Warning: Error during cleanup: {e}")
+
     # Print Banner
     print("\n" + "="*40)
     print(f" mode: eval     dataset: {dataset}")
