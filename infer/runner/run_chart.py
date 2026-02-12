@@ -172,7 +172,7 @@ def run(args):
         OUTPUT_PATH = os.path.abspath(os.path.join("output", "preds", save_name, dataset_name, "conv"))
         PICTURE_PATH = os.path.join(os.path.dirname(OUTPUT_PATH), "pictures")
 
-    print(f"Starting Inference with Agent...\nModel: {args.model_name}\nDataset: {dataset_name}\nData Path: {data_path}\nOutput Path: {OUTPUT_PATH}\nPicture Path: {PICTURE_PATH}\nConcurrency: {args.num_workers}")
+    print(f"Starting Inference with Agent...\nModel: {args.model_name}\nDataset: {dataset_name}\nData Path: {data_path}\nOutput Path: {OUTPUT_PATH}\nPicture Path: {PICTURE_PATH}\nConcurrency: {args.num_workers}\nMax Rounds: {getattr(args, 'max_rounds', 20)}")
 
     if not os.path.exists(data_path):
         print(f"Error: Data file not found at {data_path}")
@@ -209,7 +209,8 @@ def run(args):
         api_key=args.api_key,
         base_url=args.base_url,
         model_name=args.model_name,
-        data_root_path=agent_data_root
+        data_root_path=agent_data_root,
+        max_rounds=getattr(args, 'max_rounds', 20)
     )
 
     # Resolve Prompt Path
