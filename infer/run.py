@@ -86,6 +86,12 @@ def check_and_clean_failed_preds(output_dir):
                         else:
                             fields_to_check.append(str(corr))
 
+                        # Handle chart visual (dict)
+                        vis = data.get("visual")
+                        if isinstance(vis, dict):
+                            fields_to_check.append(str(vis.get("reason", "")))
+
+
                         if any(any(err in field for err in error_patterns) for field in fields_to_check):
                             print(f"Found failed eval (Error in reason/correctness): {filename}")
                             files_to_delete_eval.add(filename)
