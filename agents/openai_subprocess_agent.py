@@ -67,6 +67,7 @@ class OpenAISubporcessAgent:
                 tools=self.tools,
                 tool_choice="auto",
                 temperature=0.0, # Deterministic
+                max_tokens=8192,
                 extra_body=extra_body_params if extra_body_params else None
             )
             return response.choices[0].message, response.usage.completion_tokens
