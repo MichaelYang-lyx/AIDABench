@@ -1,0 +1,142 @@
+[project]
+name = "officebench-eval"
+version = "0.1.0"
+description = "Auto-evaluation scripts for OfficeBench"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# 核心：评测框架跑起来必须有的（尽量小）
+dependencies = [
+  "openai>=1.0.0",
+  "python-dotenv>=1.0.0",
+
+  # 数据与表格
+  "pandas>=2.0.0",
+  "openpyxl>=3.1.0",
+  "xlrd>=2.0.0",
+  "filetype>=1.0.0",
+
+  # 常用工程化
+  "tqdm>=4.66.0",
+  "rich>=13.7.0",
+  "tenacity>=8.2.0",
+  "pyyaml>=6.0.0",
+  "huggingface_hub>=0.20.0",
+]
+
+[project.optional-dependencies]
+
+# 纯数据分析（数值/统计/建模/可视化）
+analysis = [
+  "numpy>=1.26.0",
+  "scipy>=1.11.0",
+  "matplotlib>=3.8.0",
+  "statsmodels>=0.14.0",
+  "scikit-learn>=1.4.0",
+  "pyarrow>=15.0.0",
+  "duckdb>=0.10.0",
+]
+
+# Excel 读写增强（xlsb/更快的解析/写入引擎）
+excel = [
+  "xlsxwriter>=3.2.0",
+  "pyxlsb>=1.0.10",              # xlsb 解析 :contentReference[oaicite:1]{index=1}
+  "python-calamine>=0.6.0",      # 更快读 xlsx/xls/ods 等 :contentReference[oaicite:2]{index=2}
+]
+
+# DOCX：编辑 + 模板 + 合并 + 抽取 + 转换
+docx = [
+  "python-docx",
+  "docxtpl",
+  "docxcompose",
+  "mammoth",
+  "docx2pdf",
+  # "textract",  # Removed due to build error (invalid dependency specifier in v1.6.4) and lack of usage in codebase
+  "pypandoc",
+  "docx-parser",                 # 你提到的 docx-parser :contentReference[oaicite:3]{index=3}
+  # 说明：docx-parser-converter 新版标注 Python 3.10+，你当前 requires-python=3.9 不建议放进来 :contentReference[oaicite:4]{index=4}
+]
+
+# PPT：编辑/模板/压缩/转图/转PDF（注意：很多转换依赖 Office/LibreOffice）
+pptx = [
+  "python-pptx",
+  "pptx-template",               # PyPI 包名存在 :contentReference[oaicite:5]{index=5}
+  "pptxtopdf",                   # PyPI 包名存在 :contentReference[oaicite:6]{index=6}
+  "ppt2pdf",                     # PyPI 包名存在 :contentReference[oaicite:7]{index=7}
+  "msoffice2pdf",                # PyPI 包名存在 :contentReference[oaicite:8]{index=8}
+  "ppt2img",                     # PyPI 包名存在 :contentReference[oaicite:9]{index=9}
+  "pdf2slides",                  # PyPI 包名存在 :contentReference[oaicite:10]{index=10}
+  "compress-pptx",               # PyPI 包名存在 :contentReference[oaicite:11]{index=11}
+  "slidecompress",               # PyPI 包名存在 :contentReference[oaicite:12]{index=12}
+  "aspose-slides",               # 你列的 aspose-slides（本地 SDK） :contentReference[oaicite:13]{index=13}
+]
+
+# PDF：解析/抽取/表格/渲染/生成/签章等
+pdf = [
+  "pypdf",
+  "pdfminer.six",
+  "pdfplumber",
+  "PyMuPDF",
+  "pdf2image",
+  "pypdfium2",                   # PDFium 渲染替代方案（安装相对省心） :contentReference[oaicite:14]{index=14}
+  "camelot-py[cv]",
+  "tabula-py",
+  "reportlab",
+  "pikepdf",
+  "pyHanko",
+  "ocrmypdf",                    # 扫描件 PDF 一键加 OCR 层 :contentReference[oaicite:15]{index=15}
+  # "borb",                       # 可选：但注意其许可协议（AGPL）:contentReference[oaicite:16]{index=16}
+]
+
+# 图片：读写/格式/EXIF/二维码/处理
+image = [
+  "pillow",
+  "pillow-heif",                 # HEIF/HEIC 插件 :contentReference[oaicite:17]{index=17}
+  "pillow-avif-plugin",          # AVIF 插件 :contentReference[oaicite:18]{index=18}
+  "pillow-jxl-plugin",           # JPEG-XL 插件 :contentReference[oaicite:19]{index=19}
+  "imageio[ffmpeg]",
+  "opencv-python-headless",
+  "scikit-image",
+  "img2pdf",
+  "piexif",
+  "exifread",
+  "python-magic",
+  "pyzbar",
+  "qrcode[pil]",
+  "pyvips",
+  "Wand",
+]
+
+# OCR：轻量（tesseract） + 重量（easyocr，可用 GPU）
+ocr = [
+  "pytesseract",
+  "easyocr",                     # 依赖 torch/torchvision，较重 :contentReference[oaicite:20]{index=20}
+]
+
+# 文档转换服务（跨平台批量 doc/ppt/xls -> pdf/png 等，通常需要 LibreOffice）
+convert = [
+  "unoserver",                   # LibreOffice server 化转换 :contentReference[oaicite:21]{index=21}
+]
+
+# Aspose Cloud（你写的 cloud SDK）
+aspose_cloud = [
+  "aspose-words-cloud",
+  "aspose-imaging-cloud",
+  "asposeslidescloud",
+]
+
+# 一键全家桶（不想分组装时用）
+all = [
+  "officebench-eval[analysis,excel,docx,pptx,pdf,image,ocr,convert,aspose_cloud]"
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0",
+  "ruff>=0.5.0",
+  "mypy>=1.8.0",
+]
+
+[tool.uv]
+default-groups = ["dev"]
