@@ -22,6 +22,8 @@ def download_aida_dataset(target_dir=None):
         
     print(f"Downloading dataset 'MichaelYang-lyx/AIDA' to {target_dir}...")
     
+    os.makedirs(target_dir, exist_ok=True)
+    
     snapshot_download(
         repo_id="MichaelYang-lyx/AIDA",
         repo_type="dataset",
