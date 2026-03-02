@@ -4,6 +4,73 @@ import json
 import ast
 from typing import Dict, Any, List, Union
 from openai import OpenAI
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
+import anthropic
+
+@dataclass
+class ToolCall:
+    """Represents a tool call from the LLM."""
+    id: str
+    name: str
+    arguments: Dict[str, Any]
+
+@dataclass
+class LLMResponse:
+    """Response from the LLM."""
+    think_text: Optional[str]
+    content: Optional[str]
+    tool_calls: List[ToolCall] = field(default_factory=list)
+    finish_reason: str = "stop"
+    usage: Dict[str, int] = field(default_factory=dict)
+    
+    @property
+    def has_tool_calls(self):
+        # type: () -> bool
+        return len(self.tool_calls) > 0
+
+
+def parse_response(response) -> LLMResponse:
+        """Parse the Anthropic API response into LLMResponse."""
+        content_text = ""
+        think_text = ""
+        tool_calls = []
+        
+        for block in response.content:
+            if block.type == "text":
+                content_text += block.text
+            if block.type == "thinking":
+                think_text += block.thinking
+
+            elif block.type == "tool_use":
+                tool_calls.append(ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    arguments=block.input if isinstance(block.input, dict) else {}
+                ))
+        
+        # Determine finish reason
+        finish_reason = "stop"
+        if response.stop_reason == "tool_use":
+            finish_reason = "tool_calls"
+        elif response.stop_reason == "end_turn":
+            finish_reason = "stop"
+        
+        usage = {}
+        if response.usage:
+            usage = {
+                "prompt_tokens": response.usage.input_tokens,
+                "completion_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.input_tokens + response.usage.output_tokens
+            }
+        
+        return LLMResponse(
+            think_text=think_text if think_text else None,
+            content=content_text if content_text else None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage=usage
+        )
 
 # Try imports, assuming the project root is in PYTHONPATH or handled by the runner
 try:
@@ -26,7 +93,7 @@ except ImportError:
 
 class ClaudeSubprocessAgent:
     def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str, max_rounds: int = 20):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.max_rounds = max_rounds
@@ -51,25 +118,28 @@ class ClaudeSubprocessAgent:
         try:
             if has_system:
                 system_msg = messages[0].get("content")
-                response= self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages[1:],          
+            
+                raw_response= self.client.messages.create(
+                    model=self.model_name,  
+                    system=system_msg,
+                    messages=messages[1:],  
                     max_tokens=16000,
                     temperature=1,
                     tools=self.tools,
-                    # tool_choice="auto",
-                    extra_body={"system": [{"type": "text", "text": system_msg}]},
+                    tool_choice={"type": "auto"},
                 )
-            
+                
             else:
-                response= self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,              
+                raw_response= self.client.messages.create(
+                    model=self.model_name,  
+                    messages=messages,  
+                    max_tokens=16000,
+                    temperature=1,
                     tools=self.tools,
-                    tool_choice="auto",
-                    temperature=1.0,
+                    tool_choice={"type": "auto"},
                 )
-            return response.choices[0].message, response.usage.completion_tokens
+            response = parse_response(raw_response)
+            return response, response.usage['completion_tokens']
         except Exception as e:
             print(f"API Error: {e}")
             raise e
@@ -97,7 +167,6 @@ class ClaudeSubprocessAgent:
             try:
                 generated_message, completion_tokens = self._get_response_openai(input_message)
                 
-                
                 all_tokens += completion_tokens
             except Exception as e:
                 final_response = f"Error during API call: {e}"
@@ -123,14 +192,14 @@ class ClaudeSubprocessAgent:
                 
                 for tool_call in tool_calls:
                     try:
-                        args_input = json.loads(tool_call.function.arguments)
+                        
+                        args_input = json.loads(tool_call.arguments)
                     except:
                         args_input = {}
-                        
                     assistant_content.append({
                         "type": "tool_use",
                         "id": tool_call.id,
-                        "name": tool_call.function.name,
+                        "name": tool_call.name,
                         "input": args_input
                     })
 
@@ -141,8 +210,8 @@ class ClaudeSubprocessAgent:
                 
                 # Process each tool call
                 for tool_call in tool_calls:
-                    function_name = tool_call.function.name
-                    function_args = tool_call.function.arguments
+                    function_name = tool_call.name
+                    function_args = tool_call.arguments
                     tool_call_id = tool_call.id
                     
                     if function_name == "execute_code":

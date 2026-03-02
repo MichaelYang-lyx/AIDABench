@@ -22,6 +22,7 @@ dependencies = [
   "tenacity>=8.2.0",
   "pyyaml>=6.0.0",
   "huggingface_hub>=0.20.0",
+  "anthropic>=0.2.0",
 ]
 
 [project.optional-dependencies]
