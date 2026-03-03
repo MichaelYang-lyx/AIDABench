@@ -191,16 +191,11 @@ class ClaudeSubprocessAgent:
                     })
                 
                 for tool_call in tool_calls:
-                    try:
-                        
-                        args_input = json.loads(tool_call.arguments)
-                    except:
-                        args_input = {}
                     assistant_content.append({
                         "type": "tool_use",
                         "id": tool_call.id,
                         "name": tool_call.name,
-                        "input": args_input
+                        "input": tool_call.arguments  # already a dict from parse_response
                     })
 
                 input_message.append({
@@ -208,27 +203,17 @@ class ClaudeSubprocessAgent:
                     "content": assistant_content
                 })
                 
-                # Process each tool call
+                # Process each tool call and collect results
+                tool_results_content = []
                 for tool_call in tool_calls:
                     function_name = tool_call.name
-                    function_args = tool_call.arguments
+                    function_args = tool_call.arguments  # already a dict
                     tool_call_id = tool_call.id
-                    
+
                     if function_name == "execute_code":
                         try:
-                            # Parse arguments
-                            try:
-                                args_dict = json.loads(function_args)
-                                code = args_dict.get('code', '')
-                            except json.JSONDecodeError:
-                                # Fallback for malformed JSON
-                                try:
-                                     # User example used ast.literal_eval as fallback
-                                     args_dict = ast.literal_eval(function_args)
-                                     code = args_dict.get('code', '')
-                                except:
-                                     code = ""
-                            
+                            code = function_args.get('code', '')
+
                             if not code:
                                 execution_result = "Error: No code provided in arguments."
                             else:
@@ -259,46 +244,37 @@ class ClaudeSubprocessAgent:
                                 except Exception as e:
                                     execution_result = f"Execution Error: {e}"
                                 
-                            # Append Tool Output
-                            input_message.append({
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "tool_result",
-                                        "tool_use_id": tool_call_id,
-                                        "content": execution_result
-                                    }
-                                ]
+                            # Collect tool result
+                            tool_results_content.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_call_id,
+                                "content": execution_result
                             })
-                            
+
                         except Exception as e:
                              error_msg = f"Error processing tool call: {e}"
-                             input_message.append({
-                                 "role": "user",
-                                 "content": [
-                                     {
-                                         "type": "tool_result",
-                                         "tool_use_id": tool_call_id,
-                                         "content": error_msg
-                                     }
-                                 ]
+                             tool_results_content.append({
+                                 "type": "tool_result",
+                                 "tool_use_id": tool_call_id,
+                                 "content": error_msg
                              })
                     else:
-                         input_message.append({
-                             "role": "user",
-                             "content": [
-                                 {
-                                     "type": "tool_result",
-                                     "tool_use_id": tool_call_id,
-                                     "content": "Error: Unknown function."
-                                 }
-                             ]
+                         tool_results_content.append({
+                             "type": "tool_result",
+                             "tool_use_id": tool_call_id,
+                             "content": "Error: Unknown function."
                          })
+
+                # Append all tool results in a single user message
+                input_message.append({
+                    "role": "user",
+                    "content": tool_results_content
+                })
             else:
                 # No tool calls -> Final Answer
                 final_text = generated_message.content
                 if final_text:
-                    input_message.append(generated_message)
+                    input_message.append({"role": "assistant", "content": final_text})
                     final_response = final_text
                 else:
                     final_response = "Empty response from model."
