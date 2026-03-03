@@ -45,29 +45,43 @@ uv run python download_data.py
 - 填写以下变量：
   - `CHART_EVAL_API_URL`
   - `CHART_EVAL_API_KEY`
-  - `CHART_EVAL_MODEL_NAME`
+  - `CHART_EVAL_MODEL_NAME = gemini-3-pro-preview `
   - `NUMERICAL_EVAL_API_URL`
   - `NUMERICAL_EVAL_API_KEY`
-  - `NUMERICAL_EVAL_MODEL_NAME`
+  - `NUMERICAL_EVAL_MODEL_NAME = QwQ-32B`
+  - `FILE_GENERATION_EVAL_API_URL`
+  - `FILE_GENERATION_EVAL_API_KEY`
+  - `FILE_GENERATION_EVAL_MODEL_NAME = claude-sonnet-4-5-20250929`
 
 ## 运行评测
 
-- 使用 uv 运行：
+### 1. 运行推理与评估
 
-  ```bash
-  uv run python auto_eval.py --dataset numerical_statistics_mini --model_name qwq-32b
-  ```
+```bash
+# ====== Config ======
+MODEL_NAME="YOUR_MODEL_NAME"
+SAVE_NAME="YOUR_SAVE_NAME"
+BASE_URL="http://YOUR_API_BASE_URL/v1"
+API_KEY="YOUR_API_KEY"
+# ====================
 
-  ```bash
-  uv run python auto_eval.py --dataset all_mini --model_name qwq-32b
+# 运行推理 (dataset=all 表示同时运行 QA, data_visualization, file_generation)
+uv run infer/run.py \
+  --dataset all \
+  --base_url "${BASE_URL}" \
+  --api_key "${API_KEY}" \
+  --model_name "${MODEL_NAME}" \
+  --save_name "${SAVE_NAME}" \
+  --num_workers 10 \
+  --prompt_file openai_tool_general_20round.txt \
+  --agent_type "openai_subprocess_agent" \
+  --max_rounds 20
 
-  uv run python auto_eval.py --dataset file_generation_mini --model_name qwq-32b
-  ```
-
-- 或使用脚本（默认使用 `qwq-32b`）：
-  ```bash
-  ./run_eval.sh numerical_statistics_mini
-  ```
+# 运行评估
+uv run python evaluation/run.py --dataset file_generation --model_name "${SAVE_NAME}" --max_workers 10
+uv run python evaluation/run.py --dataset QA --model_name "${SAVE_NAME}" --max_workers 5
+uv run python evaluation/run.py --dataset data_visualization --model_name "${SAVE_NAME}" --max_workers 5
+```
 
 ## 数据目录结构
 
@@ -80,33 +94,3 @@ uv run python download_data.py
     - `chart/`
     - `numerical/`
     - `editing/`
-
-### 2. 并行推理框架
-
-位于 `infer/` 目录。
-
-- `framework.py`: 通用并行推理框架，支持多线程并发与断点续跑（自动跳过已处理 ID）。
-- `run_chart.py`: 针对 `chart_mini.jsonl` 的推理脚本示例，集成了代码执行工具（CodeExecutionToolkit）。
-
-**使用方法**：
-支持通过命令行参数传入 OpenAI 兼容的 API 配置。
-
-```bash
-uv run python infer/run_chart.py \
-  --api_key YOUR_API_KEY \
-  --base_url YOUR_BASE_URL \
-  --model_name YOUR_MODEL_NAME \
-  --num_workers 8
-```
-
-例如：
-
-```bash
-uv run python infer/run_chart.py \
-  --api_key sk-xxxx \
-  --base_url https://api.deepseek.com \
-  --model_name deepseek-chat \
-  --num_workers 8
-```
-
-结果将保存在 `preds/{model_name}/chart_mini/conv/{id}.json`。
