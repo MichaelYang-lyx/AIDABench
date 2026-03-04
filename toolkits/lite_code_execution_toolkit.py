@@ -407,6 +407,11 @@ class CodeExecutionToolkit:
 
                 last_result = None
 
+                # Save cwd before exec and restore after, so the runner's cwd
+                # is not permanently changed to the session's temp workdir.
+                # Unlike the old _ChdirGuard, we do NOT hold a global lock during exec.
+                prev_cwd = os.getcwd()
+
                 with _timeout_guard(self.timeout):
                     # Use thread-local stream capture instead of redirect_stdout/stderr.
                     # contextlib.redirect_stdout modifies the global sys.stdout, which
@@ -432,6 +437,11 @@ class CodeExecutionToolkit:
                     finally:
                         _tl_stdout.clear_buffer()
                         _tl_stderr.clear_buffer()
+                        # Restore cwd (best-effort, no global lock held)
+                        try:
+                            os.chdir(prev_cwd)
+                        except Exception:
+                            pass
 
             except Exception:
                 tb = traceback.format_exc()
