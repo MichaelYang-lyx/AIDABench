@@ -11,7 +11,7 @@
 # Notes:
 # - This is "Jupyter-like" persistence (shared env dict), not an actual Jupyter kernel process.
 # - State persists in-memory for the lifetime of the Python process.
-# - For real kernel-level isolation/timeouts, you’d typically use jupyter_client, but that adds deps.
+# - For real kernel-level isolation/timeouts, you'd typically use jupyter_client, but that adds deps.
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ import io
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -52,8 +53,59 @@ class _Session:
     lock: threading.RLock
 
 
+# ---------------------------------------------------------------------------
+# Thread-safe stdout/stderr capture using thread-local storage
+# ---------------------------------------------------------------------------
+class _ThreadLocalStream:
+    """
+    A stream wrapper that uses thread-local storage for per-thread capture.
+    When a thread sets a buffer via set_buffer(), all writes from that thread
+    go to the buffer instead of the original stream. Other threads are unaffected.
+    """
+    def __init__(self, original):
+        self._original = original
+        self._local = threading.local()
+
+    def write(self, s):
+        buf = getattr(self._local, 'buffer', None)
+        if buf is not None:
+            return buf.write(s)
+        return self._original.write(s)
+
+    def flush(self):
+        buf = getattr(self._local, 'buffer', None)
+        if buf is not None:
+            return buf.flush()
+        return self._original.flush()
+
+    def set_buffer(self, buf):
+        """Set a capture buffer for the current thread."""
+        self._local.buffer = buf
+
+    def clear_buffer(self):
+        """Remove the capture buffer for the current thread (writes go to original)."""
+        self._local.buffer = None
+
+    def __getattr__(self, name):
+        # Delegate all other attributes (encoding, fileno, etc.) to the original stream
+        return getattr(self._original, name)
+
+
+# Install thread-local stream wrappers (once at module level)
+_original_stdout = sys.stdout
+_original_stderr = sys.stderr
+_tl_stdout = _ThreadLocalStream(_original_stdout)
+_tl_stderr = _ThreadLocalStream(_original_stderr)
+sys.stdout = _tl_stdout  # type: ignore[assignment]
+sys.stderr = _tl_stderr  # type: ignore[assignment]
+
+
 class _ChdirGuard:
-    """Process-wide chdir guard (since os.chdir is global)."""
+    """Process-wide chdir guard (since os.chdir is global).
+
+    NOTE: This is only used by execute_command now. execute_code uses
+    code injection to avoid the global lock serialization bottleneck.
+    """
     _lock = threading.RLock()
 
     def __init__(self, target: Path):
@@ -166,7 +218,7 @@ def _timeout_guard(seconds: Optional[float]):
     """
     Best-effort timeout guard.
     - Uses signal.alarm on Main Thread (POSIX only).
-    - Uses ctypes async exception injection on Worker Threads.
+    - Uses ctypes async exception injection on Worker Threads (with retry).
     """
     if seconds is None:
         yield
@@ -187,24 +239,31 @@ def _timeout_guard(seconds: Optional[float]):
             signal.signal(signal.SIGALRM, old_handler)
         return
 
-    # 2. Worker Thread or Non-POSIX: Use ctypes async exception
+    # 2. Worker Thread or Non-POSIX: Use ctypes async exception with retry
     # This allows interrupting threads in ThreadPoolExecutor
     target_tid = threading.get_ident()
-    
+    timed_out = threading.Event()
+
     def _interrupt():
-        # Inject TimeoutError into the target thread
-        ret = ctypes.pythonapi.PyThreadState_SetAsyncExc(
-            ctypes.c_long(target_tid), 
-            ctypes.py_object(TimeoutError)
-        )
-        if ret == 0:
-            # Thread might be gone, ignore
-            pass
-        elif ret > 1:
-            # Something went wrong, try to revert
-            ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(target_tid), 0)
+        timed_out.set()
+        # Retry multiple times — a single injection may not take effect if the thread
+        # is blocked inside a C extension; retrying increases the chance of catching
+        # it between bytecode instructions.
+        for _attempt in range(5):
+            ret = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                ctypes.c_long(target_tid),
+                ctypes.py_object(TimeoutError)
+            )
+            if ret == 0:
+                break  # Thread already finished
+            elif ret > 1:
+                # Something went wrong, try to revert
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(target_tid), 0)
+                break
+            time.sleep(0.5)
 
     timer = threading.Timer(seconds, _interrupt)
+    timer.daemon = True
     timer.start()
     try:
         yield
@@ -212,6 +271,10 @@ def _timeout_guard(seconds: Optional[float]):
         raise TimeoutError(f"Code execution timed out after {seconds} seconds.")
     finally:
         timer.cancel()
+        # If timeout was triggered but the exception wasn't delivered (e.g. thread was
+        # stuck in a C extension that swallowed it), raise now that we're back in Python.
+        if timed_out.is_set():
+            raise TimeoutError(f"Code execution timed out after {seconds} seconds.")
 
 
 class CodeExecutionToolkit:
@@ -328,27 +391,47 @@ class CodeExecutionToolkit:
                 if not self.unsafe_mode and self.import_white_list is not None:
                     self._enforce_import_allowlist(code, self.import_white_list)
 
-                exec_tree, eval_tree = _split_last_expr(code)
+                # Inject os.chdir(workdir) into the code instead of using the process-wide
+                # _ChdirGuard lock. The old approach held a global RLock for the ENTIRE
+                # duration of exec(), which serialized all concurrent jupyter sessions and
+                # caused deadlocks when the timeout mechanism failed to fire.
+                # The code injection approach has a minor cwd race condition between threads,
+                # but this is far better than complete serialization / deadlock.
+                workdir_path = str(sess.workdir)
+                code_with_chdir = (
+                    f"import os as __os_wd; __os_wd.chdir({workdir_path!r}); del __os_wd\n"
+                    + code
+                )
+
+                exec_tree, eval_tree = _split_last_expr(code_with_chdir)
 
                 last_result = None
 
                 with _timeout_guard(self.timeout):
-                    with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                        with _ChdirGuard(sess.workdir):
-                            # execute statements
-                            if getattr(exec_tree, "body", None):
-                                compiled = compile(exec_tree, f"<jupyter:{self.namespace}:{sid}#{sess.exec_count}>", "exec")
-                                exec(compiled, sess.env, sess.env)
+                    # Use thread-local stream capture instead of redirect_stdout/stderr.
+                    # contextlib.redirect_stdout modifies the global sys.stdout, which
+                    # is NOT thread-safe — concurrent threads would garble each other's
+                    # output and potentially fail to restore the original stream.
+                    _tl_stdout.set_buffer(stdout_buf)
+                    _tl_stderr.set_buffer(stderr_buf)
+                    try:
+                        # execute statements
+                        if getattr(exec_tree, "body", None):
+                            compiled = compile(exec_tree, f"<jupyter:{self.namespace}:{sid}#{sess.exec_count}>", "exec")
+                            exec(compiled, sess.env, sess.env)
 
-                            # eval last expression (jupyter-like)
-                            if eval_tree is not None:
-                                compiled_expr = compile(eval_tree, f"<jupyter:{self.namespace}:{sid}#{sess.exec_count}>", "eval")
-                                last_result = eval(compiled_expr, sess.env, sess.env)
+                        # eval last expression (jupyter-like)
+                        if eval_tree is not None:
+                            compiled_expr = compile(eval_tree, f"<jupyter:{self.namespace}:{sid}#{sess.exec_count}>", "eval")
+                            last_result = eval(compiled_expr, sess.env, sess.env)
 
-                                # update _, __, ___ like IPython
-                                sess.env["___"] = sess.env.get("__")
-                                sess.env["__"] = sess.env.get("_")
-                                sess.env["_"] = last_result
+                            # update _, __, ___ like IPython
+                            sess.env["___"] = sess.env.get("__")
+                            sess.env["__"] = sess.env.get("_")
+                            sess.env["_"] = last_result
+                    finally:
+                        _tl_stdout.clear_buffer()
+                        _tl_stderr.clear_buffer()
 
             except Exception:
                 tb = traceback.format_exc()
@@ -380,7 +463,7 @@ class CodeExecutionToolkit:
             out = "\n\n".join(parts)
 
             if self.verbose:
-                print(out)
+                _original_stdout.write(out + "\n")
 
             return out
 
