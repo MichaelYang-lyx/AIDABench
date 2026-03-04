@@ -26,7 +26,7 @@ except ImportError:
 
 class OpenAIJupyterAgent:
     def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str, max_rounds: int = 20):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0)
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.max_rounds = max_rounds
@@ -53,12 +53,22 @@ class OpenAIJupyterAgent:
 
     def _get_response_openai(self, messages: List[Dict]):
         try:
+            # Determine actual model name and extra params for specific models
+            actual_model_name = self.model_name
+            extra_body_params = {}
+
+            if self.model_name == "qwen3-max-2026-01-23-thinking":
+                actual_model_name = "qwen3-max-2026-01-23"
+                extra_body_params["enable_thinking"] = True
+
             response = self.client.chat.completions.create(
-                model=self.model_name,
+                model=actual_model_name,
                 messages=messages,
                 tools=self.tools,
                 tool_choice="auto",
                 temperature=0.0, # Deterministic
+                max_tokens=8192,
+                extra_body=extra_body_params if extra_body_params else None
             )
             return response.choices[0].message, response.usage.completion_tokens
         except Exception as e:
@@ -145,9 +155,10 @@ class OpenAIJupyterAgent:
 
                                     if len(str(res)) > 2000:
                                         res = str(res)[:1000] + '...' + str(res)[-1000:]
-                                    
-                                    # User example formatting:
-                                    execution_result = f"Executed Results:\n{res}"
+                                        execution_result = f"Executed Results(Response too long; showing the first 1000 characters and the last 1000 characters.):\n{res}"
+                                    else:
+                                        # User example formatting:
+                                        execution_result = f"Executed Results:\n{res}"
                                 except Exception as e:
                                     execution_result = f"Execution Error: {e}"
                                 
