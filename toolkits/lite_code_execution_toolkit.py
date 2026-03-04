@@ -91,6 +91,10 @@ class _ThreadLocalStream:
         return getattr(self._original, name)
 
 
+# Save process-level original cwd at import time. All threads restore to this
+# after exec(), avoiding the race where thread B saves thread A's temp workdir.
+_ORIGINAL_CWD = os.getcwd()
+
 # Install thread-local stream wrappers (once at module level)
 _original_stdout = sys.stdout
 _original_stderr = sys.stderr
@@ -407,11 +411,6 @@ class CodeExecutionToolkit:
 
                 last_result = None
 
-                # Save cwd before exec and restore after, so the runner's cwd
-                # is not permanently changed to the session's temp workdir.
-                # Unlike the old _ChdirGuard, we do NOT hold a global lock during exec.
-                prev_cwd = os.getcwd()
-
                 with _timeout_guard(self.timeout):
                     # Use thread-local stream capture instead of redirect_stdout/stderr.
                     # contextlib.redirect_stdout modifies the global sys.stdout, which
@@ -437,9 +436,11 @@ class CodeExecutionToolkit:
                     finally:
                         _tl_stdout.clear_buffer()
                         _tl_stderr.clear_buffer()
-                        # Restore cwd (best-effort, no global lock held)
+                        # Restore cwd to the process's original working directory
+                        # (saved once at module import time), not a per-call snapshot
+                        # which is unreliable under concurrent threads.
                         try:
-                            os.chdir(prev_cwd)
+                            os.chdir(_ORIGINAL_CWD)
                         except Exception:
                             pass
 
