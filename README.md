@@ -1,61 +1,89 @@
-## 环境配置（uv）
+<div align="center">
 
-- 安装 `uv`：`curl -LsSf https://astral.sh/uv/install.sh | sh`
-- 创建并激活环境：
+<img src="resources/logo.png" alt="AIDABench Logo" width="420"/>
 
-  - 创建环境：`uv venv` (默认创建 `.venv` 目录)
-  - 激活环境：`source .venv/bin/activate`
+# AIDABench: AI Data Analytics Benchmark
 
-- 安装依赖：
+[![arXiv](https://img.shields.io/badge/arXiv-2603.15636-b31b1b.svg)](https://arxiv.org/abs/2603.15636)
+[![HuggingFace](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fapi%2Fdatasets%2FMichaelYang-lyx%2FAIDA&query=%24.downloads&label=%F0%9F%A4%97%20HuggingFace&suffix=%20downloads&color=yellow)](https://huggingface.co/datasets/MichaelYang-lyx/AIDA)
+[![GitHub](https://img.shields.io/badge/GitHub-AIDABench-blue?logo=github)](https://github.com/MichaelYang-lyx/AIDABench)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 
-  - **安装所有功能**（全家桶）：
-    ```bash
-    uv sync --all-extras
-    ```
+**A comprehensive benchmark for evaluating AI systems on end-to-end data analytics over real-world documents.**
 
-  **可用功能组说明**：
+[**Paper**](https://arxiv.org/abs/2603.15636) | [**Dataset**](https://huggingface.co/datasets/MichaelYang-lyx/AIDA) | [**Code**](https://github.com/MichaelYang-lyx/AIDABench) | [**中文版**](README_zh.md)
 
-  - `analysis`: 纯数据分析（numpy, pandas, matplotlib, scipy 等）
-  - `excel`: Excel 读写增强（xlsxwriter, pyxlsb, calamine）
-  - `docx`: Word 文档处理（python-docx, docxtpl 等）
-  - `pptx`: PPT 处理（python-pptx, pptxtopdf 等）
-  - `pdf`: PDF 处理（pypdf, pdfminer, camelot 等）
-  - `image`: 图像处理（pillow, opencv, heif/avif 支持等）
-  - `ocr`: OCR 识别（tesseract, easyocr）
-  - `convert`: 文档格式转换服务
-  - `aspose_cloud`: Aspose Cloud SDK
-  - `all`: 包含以上所有
+---
 
-**注意**：
+</div>
 
-- 如果你希望在当前终端会话中直接使用 `python` 等命令，需要执行 `source .venv/bin/activate`。
-- 如果你使用 `uv run`（例如 `uv run python script.py`），则无需手动激活，uv 会自动使用环境。
+## Quick Start
 
-## 下载数据集
+### 1. Environment Setup
 
-安装环境后，请运行以下命令下载数据集（需确保网络畅通）：
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create and activate environment
+uv venv
+source .venv/bin/activate
+
+# Install all dependencies
+uv sync --all-extras
+```
+
+<details>
+<summary><b>Available dependency groups</b></summary>
+
+| Group          | Description                              |
+| :------------- | :--------------------------------------- |
+| `analysis`     | numpy, pandas, matplotlib, scipy, etc.   |
+| `excel`        | xlsxwriter, pyxlsb, calamine             |
+| `docx`         | python-docx, docxtpl, etc.               |
+| `pptx`         | python-pptx, pptxtopdf, etc.             |
+| `pdf`          | pypdf, pdfminer, camelot, etc.           |
+| `image`        | pillow, opencv, heif/avif support        |
+| `ocr`          | tesseract, easyocr                       |
+| `convert`      | Document format conversion (LibreOffice) |
+| `aspose_cloud` | Aspose Cloud SDK                         |
+| `all`          | All of the above                         |
+
+</details>
+
+### 2. Download Dataset
 
 ```bash
 uv run python download_data.py
 ```
 
-## 配置 .env
+### 3. Configure Environment Variables
 
-- 复制 `.env.example` 为 `.env`：`cp .env.example .env`
-- 填写以下变量：
-  - `CHART_EVAL_API_URL`
-  - `CHART_EVAL_API_KEY`
-  - `CHART_EVAL_MODEL_NAME = gemini-3-pro-preview `
-  - `NUMERICAL_EVAL_API_URL`
-  - `NUMERICAL_EVAL_API_KEY`
-  - `NUMERICAL_EVAL_MODEL_NAME = QwQ-32B`
-  - `FILE_GENERATION_EVAL_API_URL`
-  - `FILE_GENERATION_EVAL_API_KEY`
-  - `FILE_GENERATION_EVAL_MODEL_NAME = claude-sonnet-4-5-20250929`
+```bash
+cp .env.example .env
+```
 
-## 运行评测
+Edit `.env` and fill in the following:
 
-### 1. 运行推理与评估
+```env
+# Chart Evaluation (Gemini)
+CHART_EVAL_API_URL=
+CHART_EVAL_API_KEY=
+CHART_EVAL_MODEL_NAME=gemini-3-pro-preview
+
+# Numerical Evaluation (QwQ)
+NUMERICAL_EVAL_API_URL=
+NUMERICAL_EVAL_API_KEY=
+NUMERICAL_EVAL_MODEL_NAME=QwQ-32B
+
+# File Generation Evaluation (Claude)
+FILE_GENERATION_EVAL_API_URL=
+FILE_GENERATION_EVAL_API_KEY=
+FILE_GENERATION_EVAL_MODEL_NAME=claude-sonnet-4-5-20250929
+```
+
+### 4. Run Inference & Evaluation
 
 ```bash
 # ====== Config ======
@@ -65,7 +93,7 @@ BASE_URL="http://YOUR_API_BASE_URL/v1"
 API_KEY="YOUR_API_KEY"
 # ====================
 
-# 运行推理 (dataset=all 表示同时运行 QA, data_visualization, file_generation)
+# Run inference (dataset=all runs QA, data_visualization, file_generation)
 uv run infer/run.py \
   --dataset all \
   --base_url "${BASE_URL}" \
@@ -77,20 +105,83 @@ uv run infer/run.py \
   --agent_type "openai_subprocess_agent" \
   --max_rounds 20
 
-# 运行评估
+# Run evaluation
 uv run python evaluation/run.py --dataset file_generation --model_name "${SAVE_NAME}" --max_workers 10
 uv run python evaluation/run.py --dataset QA --model_name "${SAVE_NAME}" --max_workers 5
 uv run python evaluation/run.py --dataset data_visualization --model_name "${SAVE_NAME}" --max_workers 5
 ```
 
-## 数据目录结构
+## Overview
 
-- `data/`：存放题目与标准答案（GT）
-  - `chart/`：图表可视化数据与图像
-  - `numerical/`：数值统计数据
-  - `editing/`：数据编辑数据与表格
-- `preds/`：存放模型预测结果
-  - `<model_name>/`：按模型名称区分的子目录
-    - `chart/`
-    - `numerical/`
-    - `editing/`
+Existing benchmarks often focus on isolated capabilities or simplified scenarios. **AIDABench** bridges this gap by providing end-to-end data analytics tasks spanning heterogeneous data sources — spreadsheets, databases, financial reports, and operational records.
+
+<div align="center">
+<img src="resources/figure1_overview.png" alt="AIDABench Overview" width="90%"/>
+<br/>
+<em>Figure 1: Overview of the AIDABench evaluation framework.</em>
+</div>
+
+## Task Categories
+
+AIDABench is organized around three primary capability dimensions:
+
+| Category               | Proportion | Description                                                                          |
+| :--------------------- | :--------: | :----------------------------------------------------------------------------------- |
+| **File Generation**    |   43.3%    | Data wrangling — filtering, normalization, deduplication, joins, cross-sheet linkage |
+| **Question Answering** |   37.5%    | Analytical queries — aggregation, ranking, comparisons, trend analysis               |
+| **Data Visualization** |   19.2%    | Chart creation — bar/line/pie charts with style requirements and constraints         |
+
+### Task Complexity
+
+| Level  | Proportion | Reasoning Steps |
+| :----- | :--------: | :-------------- |
+| Easy   |   29.5%    | ≤ 6 steps       |
+| Medium |   49.4%    | 7–12 steps      |
+| Hard   |   21.1%    | ≥ 13 steps      |
+
+> **27.4%** of tasks require cross-file reasoning over multiple input files (up to 14 files).
+
+<div align="center">
+<img src="resources/figure2_scenarios.png" alt="Evaluation Scenarios" width="90%"/>
+<br/>
+<em>Figure 2: Example evaluation scenarios for QA, Data Visualization, and File Generation.</em>
+</div>
+
+## Evaluation Framework
+
+All models are evaluated under a unified **tool-augmented protocol**: the model receives task instructions and associated files, then executes **arbitrary Python code** within a **sandboxed environment** to complete the task.
+
+Three dedicated **LLM-based evaluators** are used:
+
+| Evaluator                   | Target           | Approach                                       |
+| :-------------------------- | :--------------- | :--------------------------------------------- |
+| **QA Evaluator**            | Textual answers  | Binary judge for answer correctness            |
+| **Visualization Evaluator** | Charts & figures | Scores correctness + readability               |
+| **File Evaluator**          | Spreadsheets     | Coarse-to-fine structural & content validation |
+
+<div align="center">
+<img src="resources/figure3_evaluators.png" alt="Evaluator Design" width="90%"/>
+<br/>
+<em>Figure 3: The design of the three types of evaluators in AIDABench.</em>
+</div>
+
+## Citation
+
+If you find AIDABench useful for your research, please cite our paper:
+
+```bibtex
+@article{yang2026aidabench,
+  title={AIDABench: AI Data Analytics Benchmark},
+  author={Yang, Yibo and Lei, Fei and Sun, Yixuan and Zeng, Yantao and Lv, Chengguang and Hong, Jiancao and Tian, Jiaojiao and Qiu, Tianyu and Wang, Xin and Chen, Yanbing and Li, Yanjie and Pan, Zheng and Zhou, Xiaochen and Chen, Guanzhou and Lv, Haoran and Xu, Yuning and Ou, Yue and Liu, Haodong and He, Shiqi and Jia, Anya and Xin, Yulei and Wu, Huan and Liu, Liang and Ge, Jiaye and Dong, Jianxin and Lin, Dahua and Sun, Wenxiu},
+  journal={arXiv preprint arXiv:2603.15636},
+  year={2026}
+}
+```
+
+<div align="center">
+
+---
+
+Made with dedication by the AIDABench Team
+
+</div>
