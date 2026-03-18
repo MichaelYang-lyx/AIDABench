@@ -178,10 +178,4 @@ AIDABench 围绕三大核心能力维度组织：
 }
 ```
 
-<div align="center">
-
----
-
-AIDABench 团队倾力打造
-
 </div>

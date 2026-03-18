@@ -177,11 +177,3 @@ If you find AIDABench useful for your research, please cite our paper:
   year={2026}
 }
 ```
-
-<div align="center">
-
----
-
-Made with dedication by the AIDABench Team
-
-</div>
