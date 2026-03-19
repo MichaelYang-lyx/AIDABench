@@ -6,13 +6,14 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-2603.15636-b31b1b.svg)](https://arxiv.org/abs/2603.15636)
 [![HuggingFace](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fapi%2Fdatasets%2FMichaelYang-lyx%2FAIDA&query=%24.downloads&label=%F0%9F%A4%97%20HuggingFace&suffix=%20downloads&color=yellow)](https://huggingface.co/datasets/MichaelYang-lyx/AIDA)
+[![OpenCompass](https://img.shields.io/badge/OpenCompass-Hub-4B0082)](https://hub.opencompass.org.cn/dataset-detail/AIDABench)
 [![GitHub](https://img.shields.io/badge/GitHub-AIDABench-blue?logo=github)](https://github.com/MichaelYang-lyx/AIDABench)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 
 **A comprehensive benchmark for evaluating AI systems on end-to-end data analytics over real-world documents.**
 
-[**Paper**](https://arxiv.org/abs/2603.15636) | [**Dataset**](https://huggingface.co/datasets/MichaelYang-lyx/AIDA) | [**Code**](https://github.com/MichaelYang-lyx/AIDABench) | [**中文版**](README_zh.md)
+[**Paper**](https://arxiv.org/abs/2603.15636) | [**Dataset**](https://huggingface.co/datasets/MichaelYang-lyx/AIDA) | [**OpenCompass**](https://hub.opencompass.org.cn/dataset-detail/AIDABench) | [**Code**](https://github.com/MichaelYang-lyx/AIDABench) | [**中文版**](README_zh.md)
 
 ---
 
