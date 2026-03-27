@@ -5,7 +5,7 @@
 # AIDABench: AI Data Analytics Benchmark
 
 [![arXiv](https://img.shields.io/badge/arXiv-2603.15636-b31b1b.svg)](https://arxiv.org/abs/2603.15636)
-[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-1.7k%20downloads-yellow)](https://huggingface.co/datasets/MichaelYang-lyx/AIDA)
+[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-1.8k%20downloads-yellow)](https://huggingface.co/datasets/MichaelYang-lyx/AIDA)
 [![OpenCompass](https://img.shields.io/badge/OpenCompass-Hub-4B0082)](https://hub.opencompass.org.cn/dataset-detail/AIDABench)
 [![GitHub](https://img.shields.io/badge/GitHub-AIDABench-blue?logo=github)](https://github.com/MichaelYang-lyx/AIDABench)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
