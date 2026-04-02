@@ -135,8 +135,8 @@ def main():
     
     # Common arguments for all tasks
     parser.add_argument("--dataset", required=True, help="Dataset name (e.g., chart, chart_mini)")
-    parser.add_argument("--api_key", required=True, help="OpenAI API Key")
-    parser.add_argument("--base_url", required=True, help="OpenAI Base URL")
+    parser.add_argument("--api_key", required=True, help="API Key")
+    parser.add_argument("--base_url", default="", help="OpenAI Base URL (not needed for proxy_jupyter_agent)")
     parser.add_argument("--model_name", required=True, help="Model Name to use")
     parser.add_argument("--save_name", help="Name to use for saving results (default: model_name)")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel workers")
@@ -145,8 +145,12 @@ def main():
     parser.add_argument("--data_path", help="Optional specific data path")
     parser.add_argument("--prompt_file", help="Name of the prompt file in infer/prompts/ or absolute path")
     parser.add_argument("--need_info", action="store_true", help="Enable file info enhancement (default: False)")
-    parser.add_argument("--agent_type", default="openai_jupyter_agent", help="Agent type to use. Choices: openai_jupyter_agent, openai_subprocess_agent, claude_jupyter_agent, claude_subprocess_agent. (default: openai_jupyter_agent)")
+    parser.add_argument("--agent_type", default="openai_jupyter_agent", help="Agent type to use. Choices: openai_jupyter_agent, proxy_jupyter_agent, openai_subprocess_agent, claude_jupyter_agent, claude_subprocess_agent. (default: openai_jupyter_agent)")
     parser.add_argument("--max_rounds", type=int, default=20, help="Maximum number of rounds for the agent (default: 20)")
+    parser.add_argument("--channel_code", default="ali", help="Channel code for proxy agent (default: ali)")
+    parser.add_argument("--transaction_id", default="proxy_task", help="Transaction ID for proxy agent")
+    parser.add_argument("--enable_thinking", action="store_true", default=False, help="Enable thinking mode for proxy agent")
+    parser.add_argument("--skills_dir", default=None, help="Skills directory for skill_jupyter_agent (default: skills/)")
 
     # Capture all arguments
     args = parser.parse_args()

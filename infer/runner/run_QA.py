@@ -9,9 +9,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from infer.framework import InferenceRunner
 try:
     from agents.openai_jupyter_agent import OpenAIJupyterAgent
+    from agents.proxy_jupyter_agent import ProxyJupyterAgent
     from agents.claude_jupyter_agent import ClaudeJupyterAgent
     from agents.openai_subprocess_agent import OpenAISubporcessAgent
     from agents.claude_subprocess_agent import ClaudeSubprocessAgent
+    from agents.skill_jupyter_agent import SkillJupyterAgent
     # Helpers for process_row
     from toolkits import CodeExecutionToolkit, generate_file_info_string, extract_workbook_summary3b
     from infer.dataset_info import DATASET_INFO
@@ -20,7 +22,7 @@ except ImportError:
     OpenAIJupyterAgent = None
     OpenAISubporcessAgent = None
     ClaudeSubprocessAgent = None
-    CodeExecutionToolkit = None
+    SkillJupyterAgent = None
     generate_file_info_string = None
     extract_workbook_summary3b = None
     DATASET_INFO = None
@@ -200,8 +202,14 @@ def run(args):
             agent_data_root = os.path.join(args.data_root, rel_root)
             
     agent_class = OpenAIJupyterAgent
+    use_proxy = False
     if hasattr(args, 'agent_type'):
-        if 'jupyter' in args.agent_type:
+        if args.agent_type == 'proxy_jupyter_agent':
+            agent_class = ProxyJupyterAgent
+            use_proxy = True
+        elif args.agent_type == 'skill_jupyter_agent':
+            agent_class = SkillJupyterAgent
+        elif 'jupyter' in args.agent_type:
             if args.agent_type == 'claude_jupyter_agent':
                 agent_class = ClaudeJupyterAgent
             else:
@@ -211,16 +219,36 @@ def run(args):
                 agent_class = ClaudeSubprocessAgent
             else:
                 agent_class = OpenAISubporcessAgent
-            
+
     print(f"Using Agent: {agent_class.__name__}")
 
-    agent = agent_class(
-        api_key=args.api_key,
-        base_url=args.base_url,
-        model_name=args.model_name,
-        data_root_path=agent_data_root,
-        max_rounds=getattr(args, 'max_rounds', 20)
-    )
+    if use_proxy:
+        agent = agent_class(
+            api_key=args.api_key,
+            model_name=args.model_name,
+            data_root_path=agent_data_root,
+            channel_code=getattr(args, 'channel_code', 'ali'),
+            transaction_id=getattr(args, 'transaction_id', 'proxy_task'),
+            enable_thinking=getattr(args, 'enable_thinking', False),
+            max_rounds=getattr(args, 'max_rounds', 20)
+        )
+    elif agent_class is SkillJupyterAgent:
+        agent = agent_class(
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model_name=args.model_name,
+            data_root_path=agent_data_root,
+            max_rounds=getattr(args, 'max_rounds', 20),
+            skills_dir=getattr(args, 'skills_dir', None)
+        )
+    else:
+        agent = agent_class(
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model_name=args.model_name,
+            data_root_path=agent_data_root,
+            max_rounds=getattr(args, 'max_rounds', 20)
+        )
 
     # Resolve Prompt Path
     prompt_path = None
