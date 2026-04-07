@@ -26,25 +26,19 @@ def main():
     
     args = parser.parse_args()
     
-    dataset = args.dataset.lower()
-    
+    dataset = args.dataset  # preserve original casing for paths
+    dataset_lower = dataset.lower()  # lowercase only for dispatch logic
+
     # Construct Defaults
-    # Note: project_root might be where we want to base relative paths
-    # but os.path.join("preds", ...) is relative to CWD. 
-    # infer/run.py uses CWD for defaults implicitly or explicit joins.
-    # Let's use absolute paths based on project_root to be safe, or just CWD if that's the convention.
-    # infer/run.py defaults: os.path.join("preds", ...) -> relative to where you run it.
-    # But here I will make them absolute based on project_root to avoid CWD ambiguity if run from subdir.
-    
     if not args.input_path:
         args.input_path = os.path.join(project_root, "output", "preds", args.model_name, dataset, "conv")
-        
+
     if not args.picture_dir:
         args.picture_dir = os.path.join(project_root, "output", "preds", args.model_name, dataset, "pictures")
 
     if not args.generated_files_dir:
         args.generated_files_dir = os.path.join(project_root, "output", "preds", args.model_name, dataset, "generated_files")
-        
+
     if not args.output_path:
         args.output_path = os.path.join(project_root, "output", "evals", args.model_name, dataset)
 
@@ -86,7 +80,7 @@ def main():
         # We proceed, maybe load_dataset will fail cleanly or user made a mistake
         
     # Dispatch
-    if "data_visualization" in dataset or "chart" in dataset:
+    if "data_visualization" in dataset_lower or "chart" in dataset_lower:
         try:
             from evaluation.runner.eval_data_visualization import run as run_chart_eval
             run_chart_eval(args)
@@ -98,7 +92,7 @@ def main():
             import traceback
             traceback.print_exc()
             sys.exit(1)
-    elif "file" in dataset:
+    elif "file" in dataset_lower:
         try:
             from evaluation.runner.eval_file_generation import run as run_file_eval
             run_file_eval(args)
@@ -110,7 +104,7 @@ def main():
             import traceback
             traceback.print_exc()
             sys.exit(1)
-    elif "qa" in dataset or "numeric" in dataset:
+    elif "qa" in dataset_lower or "numeric" in dataset_lower:
         try:
             from evaluation.runner.eval_QA import run as run_numeric_eval
             run_numeric_eval(args)
@@ -155,11 +149,11 @@ def main():
                 if 'visual_score' in local_summary:
                     model_entry['data_visualization_readability_score'] = round(float(local_summary['visual_score']), 4)
                 
-            elif "file" in dataset: # file_generation
+            elif "file" in dataset_lower: # file_generation
                 if 'score' in local_summary:
                     model_entry['file_generation_score'] = round(float(local_summary['score']), 4)
                     
-            elif "qa" in dataset or "numeric" in dataset:
+            elif "qa" in dataset_lower or "numeric" in dataset_lower:
                 if 'score' in local_summary:
                     model_entry['QA_score'] = round(float(local_summary['score']), 4)
             

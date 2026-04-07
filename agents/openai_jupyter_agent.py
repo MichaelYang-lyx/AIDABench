@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import ast
+import time
 from typing import Dict, Any, List, Union
 from openai import OpenAI
 
@@ -52,28 +53,34 @@ class OpenAIJupyterAgent:
         }]
 
     def _get_response_openai(self, messages: List[Dict]):
-        try:
-            # Determine actual model name and extra params for specific models
-            actual_model_name = self.model_name
-            extra_body_params = {}
+        for attempt in range(10):
+            try:
+                # Determine actual model name and extra params for specific models
+                actual_model_name = self.model_name
+                extra_body_params = {}
 
-            if self.model_name == "qwen3-max-2026-01-23-thinking":
-                actual_model_name = "qwen3-max-2026-01-23"
-                extra_body_params["enable_thinking"] = True
+                if self.model_name == "qwen3-max-2026-01-23-thinking":
+                    actual_model_name = "qwen3-max-2026-01-23"
+                    extra_body_params["enable_thinking"] = True
 
-            response = self.client.chat.completions.create(
-                model=actual_model_name,
-                messages=messages,
-                tools=self.tools,
-                tool_choice="auto",
-                temperature=0.0, # Deterministic
-                max_tokens=8192,
-                extra_body=extra_body_params if extra_body_params else None
-            )
-            return response.choices[0].message, response.usage.completion_tokens
-        except Exception as e:
-            print(f"API Error: {e}")
-            raise e
+                response = self.client.chat.completions.create(
+                    model=actual_model_name,
+                    messages=messages,
+                    tools=self.tools,
+                    tool_choice="auto",
+                    temperature=0.0, # Deterministic
+                    max_tokens=8192,
+                    extra_body=extra_body_params if extra_body_params else None
+                )
+                if not response.choices:
+                    raise Exception(f"Empty choices in response: {response}")
+                return response.choices[0].message, response.usage.completion_tokens
+            except Exception as e:
+                print(f"API Error (attempt {attempt + 1}/10): {e}")
+                if attempt < 9:
+                    time.sleep(5)
+                else:
+                    raise e
 
     def interact(self, query: str, system_prompt: str, run_code_func: Any, path_info: Dict[str, str]) -> Dict[str, Any]:
         """

@@ -40,7 +40,7 @@ def check_and_clean_failed_preds(output_dir):
     if eval_dir and os.path.exists(eval_dir):
         print(f"Also checking corresponding eval files in {eval_dir}...")
 
-    error_patterns = ["Request timed out","ClaudeSubprocessAgent","claude_subprocess_agent.py","Error code: 429","502 Bad Gateway", "Error code: 503", "engine is currently overloaded", "Too many API failures"]
+    error_patterns = ["Request timed out","ClaudeSubprocessAgent","claude_subprocess_agent.py","Error code: 429","502 Bad Gateway", "Error code: 503", "engine is currently overloaded", "Too many API failures","Error during API call"]
     
     files_to_delete_conv = set()
     files_to_delete_eval = set()
@@ -157,14 +157,12 @@ def main():
     
     # Attach helper function to args so downstream runners can use it
     args.get_sys_msg_func = get_sys_msg
-    dataset = args.dataset.lower()
-    
     # Get the directory where this script (infer/run.py) is located
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Determine which datasets to run
+
+    # Determine which datasets to run (preserve original casing for paths)
     datasets_to_run = []
-    if dataset == 'all':
+    if args.dataset.lower() == 'all':
         datasets_to_run = ['data_visualization', 'QA', 'file_generation']
     else:
         datasets_to_run = [args.dataset]
