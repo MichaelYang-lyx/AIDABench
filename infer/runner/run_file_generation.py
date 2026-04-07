@@ -8,25 +8,50 @@ import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from infer.framework import InferenceRunner
+
+# Import agents individually so one missing dependency doesn't block the rest
+OpenAIJupyterAgent = None
+ProxyJupyterAgent = None
+ClaudeJupyterAgent = None
+OpenAISubporcessAgent = None
+ClaudeSubprocessAgent = None
+SkillJupyterAgent = None
+generate_file_info_string = None
+extract_workbook_summary3b = None
+DATASET_INFO = None
+
 try:
     from agents.openai_jupyter_agent import OpenAIJupyterAgent
+except ImportError:
+    pass
+try:
     from agents.proxy_jupyter_agent import ProxyJupyterAgent
+except ImportError:
+    pass
+try:
     from agents.claude_jupyter_agent import ClaudeJupyterAgent
+except ImportError:
+    pass
+try:
     from agents.openai_subprocess_agent import OpenAISubporcessAgent
+except ImportError:
+    pass
+try:
     from agents.claude_subprocess_agent import ClaudeSubprocessAgent
+except ImportError:
+    pass
+try:
     from agents.skill_jupyter_agent import SkillJupyterAgent
-    # Helpers for process_row
+except ImportError:
+    pass
+try:
     from toolkits import CodeExecutionToolkit, generate_file_info_string, extract_workbook_summary3b
+except ImportError:
+    pass
+try:
     from infer.dataset_info import DATASET_INFO
 except ImportError:
-    print("Warning: Could not import OpenAIJupyterAgent or Evaluation Toolkit. Ensure dependencies are met.")
-    OpenAIJupyterAgent = None
-    OpenAISubporcessAgent = None
-    ClaudeSubprocessAgent = None
-    SkillJupyterAgent = None
-    generate_file_info_string = None
-    extract_workbook_summary3b = None
-    DATASET_INFO = None
+    pass
 
 # Dataset Mapping
 DATASET_MAPPING = {
@@ -181,10 +206,6 @@ def run(args):
         print(f"Error: Data file not found at {data_path}")
         sys.exit(1)
 
-    if OpenAIJupyterAgent is None:
-        print("Error: OpenAIJupyterAgent not found. Cannot proceed.")
-        sys.exit(1)
-
     # Initialize Agent
     agent_data_root = args.data_root
     if DATASET_INFO and dataset_name in DATASET_INFO:
@@ -192,7 +213,7 @@ def run(args):
         rel_root = DATASET_INFO[dataset_name].get("data_root_path")
         if rel_root:
             agent_data_root = os.path.join(args.data_root, rel_root)
-            
+
     agent_class = OpenAIJupyterAgent
     use_proxy = False
     if hasattr(args, 'agent_type'):
@@ -211,6 +232,10 @@ def run(args):
                 agent_class = ClaudeSubprocessAgent
             else:
                 agent_class = OpenAISubporcessAgent
+
+    if agent_class is None:
+        print(f"Error: Agent class for '{args.agent_type}' not found. Cannot proceed.")
+        sys.exit(1)
 
     print(f"Using Agent: {agent_class.__name__}")
 
