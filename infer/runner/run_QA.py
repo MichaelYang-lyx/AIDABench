@@ -44,6 +44,10 @@ try:
 except ImportError:
     pass
 try:
+    from agents.hermes_agent import HermesAgent
+except ImportError:
+    HermesAgent = None
+try:
     from toolkits import CodeExecutionToolkit, generate_file_info_string, extract_workbook_summary3b
 except ImportError:
     pass
@@ -120,13 +124,15 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
 
     # 3. Initialize Code Execution Toolkit (Persistent Session per Task)
     toolkit = None
-    if CodeExecutionToolkit:
+    if HermesAgent and isinstance(agent, HermesAgent):
+        run_code = None
+    elif CodeExecutionToolkit:
         sandbox_type = "jupyter"
         if OpenAISubporcessAgent and isinstance(agent, OpenAISubporcessAgent):
              sandbox_type = "subprocess"
         if ClaudeSubprocessAgent and isinstance(agent, ClaudeSubprocessAgent):
              sandbox_type = "subprocess"
-        
+
         toolkit = CodeExecutionToolkit(sandbox=sandbox_type, namespace=f"task_{task_id}", timeout=30)
         run_code = toolkit.get_tools()[0] # execute_code function tool
     else:
@@ -143,10 +149,12 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
             question = f"{question}\n\n 你所用到的文件在: {file_paths_str}"
             first_file_dir = os.path.dirname(real_file_path_list[0])
             path_info = {'real_input_dir': first_file_dir,
-                         'mnt_input_dir': mnt_dir_path}
+                         'mnt_input_dir': mnt_dir_path,
+                         'task_id': str(task_id)}
         else:
             path_info = {'real_input_dir': agent.data_root_path,
-                         'mnt_input_dir': mnt_dir_path}
+                         'mnt_input_dir': mnt_dir_path,
+                         'task_id': str(task_id)}
         
         if generated_files_path:
             # Create a specific directory for this task's generated files
@@ -224,12 +232,16 @@ def run(args):
 
     agent_class = OpenAIJupyterAgent
     use_proxy = False
+    use_hermes = False
     if hasattr(args, 'agent_type'):
         if args.agent_type == 'proxy_jupyter_agent':
             agent_class = ProxyJupyterAgent
             use_proxy = True
         elif args.agent_type == 'skill_jupyter_agent':
             agent_class = SkillJupyterAgent
+        elif args.agent_type == 'hermes_agent':
+            agent_class = HermesAgent
+            use_hermes = True
         elif 'jupyter' in args.agent_type:
             if args.agent_type == 'claude_jupyter_agent':
                 agent_class = ClaudeJupyterAgent
@@ -247,7 +259,16 @@ def run(args):
 
     print(f"Using Agent: {agent_class.__name__}")
 
-    if use_proxy:
+    if use_hermes:
+        agent = agent_class(
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model_name=args.model_name,
+            data_root_path=agent_data_root,
+            save_name=getattr(args, 'save_name', None) or args.model_name,
+            max_rounds=getattr(args, 'max_rounds', 90),
+        )
+    elif use_proxy:
         agent = agent_class(
             api_key=args.api_key,
             model_name=args.model_name,
@@ -264,7 +285,7 @@ def run(args):
             model_name=args.model_name,
             data_root_path=agent_data_root,
             max_rounds=getattr(args, 'max_rounds', 20),
-            skills_dir=getattr(args, 'skills_dir', None)
+            skills_dir=getattr(args, 'skills_dir', None),
         )
     else:
         agent = agent_class(
@@ -272,7 +293,7 @@ def run(args):
             base_url=args.base_url,
             model_name=args.model_name,
             data_root_path=agent_data_root,
-            max_rounds=getattr(args, 'max_rounds', 20)
+            max_rounds=getattr(args, 'max_rounds', 20),
         )
 
     # Resolve Prompt Path
