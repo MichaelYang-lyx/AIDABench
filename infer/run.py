@@ -151,6 +151,8 @@ def main():
     parser.add_argument("--transaction_id", default="proxy_task", help="Transaction ID for proxy agent")
     parser.add_argument("--enable_thinking", action="store_true", default=False, help="Enable thinking mode for proxy agent")
     parser.add_argument("--skills_dir", default=None, help="Skills directory for skill_jupyter_agent (default: skills/)")
+    parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (default: 0.0)")
+    parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling parameter (default: 1.0)")
 
     # Capture all arguments
     args = parser.parse_args()
@@ -204,7 +206,7 @@ def main():
                 print(f"Error executing task: {e}")
                 sys.exit(1)
                 
-        elif "qa" in ds_lower or "numeric" in ds_lower or "numerical" in ds_lower:
+        elif "qa" in ds_lower or "numeric" in ds_lower or "numerical" in ds_lower or "wps" in ds_lower:
             try:
                 from infer.runner.run_QA import run as run_numeric_task
                 print(f"Dispatching to infer.runner.run_QA for dataset '{ds_name}'...")

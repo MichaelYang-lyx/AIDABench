@@ -104,7 +104,7 @@ def main():
             import traceback
             traceback.print_exc()
             sys.exit(1)
-    elif "qa" in dataset_lower or "numeric" in dataset_lower:
+    elif "qa" in dataset_lower or "numeric" in dataset_lower or "wps" in dataset_lower:
         try:
             from evaluation.runner.eval_QA import run as run_numeric_eval
             run_numeric_eval(args)
@@ -153,13 +153,15 @@ def main():
                 if 'score' in local_summary:
                     model_entry['file_generation_score'] = round(float(local_summary['score']), 4)
                     
-            elif "qa" in dataset_lower or "numeric" in dataset_lower:
+            elif "qa" in dataset_lower or "numeric" in dataset_lower or "wps" in dataset_lower:
                 if 'score' in local_summary:
-                    model_entry['QA_score'] = round(float(local_summary['score']), 4)
+                    key = 'wps_score' if 'wps' in dataset_lower else 'QA_score'
+                    model_entry[key] = round(float(local_summary['score']), 4)
             
             # Reorder keys in model_entry
             ordered_keys = [
                 "QA_score",
+                "wps_score",
                 "data_visualization_correctness_score",
                 "data_visualization_readability_score",
                 "file_generation_score"

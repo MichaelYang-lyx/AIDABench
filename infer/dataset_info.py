@@ -10,5 +10,9 @@ DATASET_INFO = {
     "QA":{
         "file_path": "QA/QA.jsonl",
         "data_root_path": "QA/input",
+    },
+    "wps": {
+        "file_path": "wps/wps.jsonl",
+        "data_root_path": "wps/input",
     }
 }
