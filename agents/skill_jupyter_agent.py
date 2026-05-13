@@ -22,6 +22,9 @@ import queue
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from skills import SkillsLoader
+
 from openai import OpenAI
 
 try:
@@ -225,98 +228,50 @@ TOOLS_SCHEMA = [
 # Skill discovery
 # ============================================================
 
-# Skill metadata: name, description, file type triggers
-_SKILL_META = {
-    "minimax-xlsx": {
-        "name": "minimax-xlsx",
-        "type": "xlsx",
-        "description": (
-            "Use for ALL Excel/spreadsheet tasks: create new .xlsx from scratch, "
-            "read and analyze existing files, edit existing .xlsx with zero format loss, "
-            "fix broken formulas, validate formulas. Triggers on: .xlsx, .xls, .csv, "
-            "'spreadsheet', 'Excel', 'pivot table', 'financial model', 'formula', "
-            "or any request to produce tabular data in Excel format."
-        ),
-    },
-    "pptx-generator": {
-        "name": "pptx-generator",
-        "type": "pptx",
-        "description": (
-            "Use for ALL PowerPoint tasks: generate presentations from scratch with "
-            "PptxGenJS, edit existing PPTX via XML workflows, or extract text with "
-            "markitdown. Triggers on: PPT, PPTX, PowerPoint, presentation, slide, deck."
-        ),
-    },
-    "minimax-pdf": {
-        "name": "minimax-pdf",
-        "type": "pdf",
-        "description": (
-            "Use when visual quality matters for a PDF. Three routes: "
-            "CREATE (generate from scratch), FILL (complete form fields in existing PDF), "
-            "REFORMAT (apply design to existing doc). Triggers on: 'make a PDF', "
-            "'generate a report', 'fill in the form', 'reformat this document', "
-            "'beautiful PDF', 'professional document', 'cover page'."
-        ),
-    },
-    "minimax-docx": {
-        "name": "minimax-docx",
-        "type": "docx",
-        "description": (
-            "Use for ALL Word document tasks: create new .docx from scratch, "
-            "fill/edit content in existing documents, apply template formatting. "
-            "Triggers on: Word, docx, document, 'write a report', 'draft a proposal', "
-            "'make a contract', 'fill in this form', 'reformat to match this template', "
-            "or any task whose final output is a .docx file."
-        ),
-    },
-}
-
 
 def _build_skills_block(skills_dir: str) -> str:
-    """Scan skills_dir and build the <skills> XML block for the system prompt."""
-    skills_dir = Path(skills_dir)
-    entries = []
-    for skill_dir in sorted(skills_dir.iterdir()):
-        if not skill_dir.is_dir():
-            continue
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            continue
-        skill_name = skill_dir.name
-        meta = _SKILL_META.get(skill_name, {})
-        stype = meta.get("type", "general")
-        description = meta.get("description", f"Skill for {skill_name}.")
-        entries.append(
-            f'  <skill available="true" type="{stype}">\n'
-            f'    <name>{skill_name}</name>\n'
-            f'    <description>{description}</description>\n'
-            f'    <location>{skill_md}</location>\n'
-            f'  </skill>'
-        )
-    if not entries:
+    """Build the <skills> XML block using SkillsLoader."""
+    loader = SkillsLoader(skills_dir)
+    skills = loader.list_skills(filter_unavailable=False)
+    if not skills:
         return ""
-    return "## 🛠️ Available Skills\n<skills>\n" + "\n".join(entries) + "\n</skills>"
+    entries = []
+    for s in skills:
+        avail = str(s["available"]).lower()
+        name = s["name"]
+        desc = s["description"]
+        loc = s["path"]
+        entries.append(
+            f"  <skill available='{avail}'>\n"
+            f"    <name>{name}</name>\n"
+            f"    <description>{desc}</description>\n"
+            f"    <location>{loc}</location>\n"
+            f"  </skill>"
+        )
+    return "## 🛠 Available Skills\n<skills>\n" + "\n".join(entries) + "\n</skills>"
 
 
 def _build_system_prompt(skills_block: str) -> str:
-    return f"""You are a professional AI assistant with advanced data analysis, file management, and code execution capabilities.
+    return f"""# Role
+你是办公小浣熊，一个由商汤科技研发的专业、稳健的 AI 分析助手。
+- 核心能力：写作与文本生成，数据分析与结构化推理，复杂任务拆解与执行规划
+- 工作原则：理解用户的核心诉求，根据实际需要组合调用各种工具，在信息可验证、逻辑可追溯的前提下，高质量完成用户请求。
 
 <path_mapping>
-File paths in user messages use virtual mount paths that are automatically remapped to real paths:
-- Input files: `/mnt/data/<filename>` → actual data directory
-- Output files: `/mnt/result/<filename>` → actual output directory
-Always use the paths exactly as provided in the user message; the system handles the remapping transparently.
+用户消息中的文件路径使用虚拟挂载路径，系统会自动重映射到真实路径：
+- 输入文件：`/mnt/data/<filename>` → 实际数据目录
+- 输出文件：`/mnt/result/<filename>` → 实际输出目录
+请直接使用用户消息中提供的路径，系统会透明地处理路径映射。
 </path_mapping>
 
 <workflow>
-### Skill-First Principle
-At the start of every task, scan the available skills list below. If a matching skill exists, you MUST use `read_file` to load its SKILL.md, read the workflow and best practices carefully, then follow the skill's guidance strictly.
-
-## Execution workflow
-1. Identify & match (Identify): Based on file type or task intent, decide whether to activate a skill. If yes, use read_file to load the SKILL.md.
-2. Plan (Plan): If a skill is loaded, think step-by-step following the skill's workflow. Otherwise, deeply analyze the user's request and form a high-level plan. Break complex problems into smaller executable steps.
-3. Execute step-by-step (Execute): After each step, evaluate the result before proceeding. On errors, analyze and self-heal. If a tool keeps failing, switch to an alternative approach. Proactively handle data quality issues (missing values, type errors).
-4. Synthesize (Synthesize): Aggregate results and present a clear, structured final answer.
+### 技能优先原则
+每次接收任务时，**首先**检查可用技能列表。如果存在匹配的技能，必须用 `read_file` 读取其 SKILL.md 文档，仔细阅读其工作流和最佳实践，然后严格按照技能指导执行任务。
+## 实际工作流程
+1. 解析与技能匹配 (Identify)：根据文件格式，选择是否激活skills且如果要使用skills，请用read_file工具来打印内容。
+2. 分步规划 (Plan)：如果有技能加载，请根据技能的指导来一步步思考，如果没有请根据用户的提问进行深度思考，在脑海中形成一个高层级的分析计划。将用户的复杂问题拆解成一系列可以由工具执行的、更小的逻辑步骤。例如，处理表格时，应先检查所有sheet，找出相关的表再进行进一步分析。
+3. 单步执行 (Execute)：分析结果后决定是否需要下一步。若报错，需分析原因并尝试修复（Self-Healing）。当一个工具持续出错时，应考虑其他方案而不是执着于修复。如果发现数据有质量问题（如缺失值、异常值），应主动使用工具进行探查或清洗。
+4. 结果综合 (Synthesize)：汇总数据，以 Markdown 表格形式呈现。
 </workflow>
 
 {skills_block}
@@ -471,15 +426,18 @@ class SkillJupyterAgent:
 
     def __init__(self, api_key: str, base_url: str, model_name: str,
                  data_root_path: str, max_rounds: int = 20,
-                 skills_dir: str = None):
+                 skills_dir: str = None, enable_thinking: bool = False, **kwargs):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.max_rounds = max_rounds
         self.baseUrl = base_url
+        self.enable_thinking = enable_thinking
 
         if skills_dir is None:
             skills_dir = str(_PROJECT_ROOT / "skills")
+        else:
+            skills_dir = str(Path(skills_dir).resolve())
         self.skills_dir = skills_dir
         self._skills_block = _build_skills_block(skills_dir)
         self._system_prompt_base = _build_system_prompt(self._skills_block)
@@ -492,7 +450,8 @@ class SkillJupyterAgent:
         lightllm path: returns (str, int)
         openai path:   returns (openai.types.chat.ChatCompletionMessage, int)
         """
-        if self.baseUrl.rstrip("/").endswith("/generate"):
+        stripped = self.baseUrl.rstrip("/")
+        if stripped.endswith("/generate") or stripped.endswith("/completions"):
             return self._call_lightllm(messages)
         return self._call_openai_chat(messages)
 
@@ -510,25 +469,49 @@ class SkillJupyterAgent:
                 input_text += f"<|im_start|>user\n<tool_response>\n{content}\n</tool_response><|im_end|>\n"
             else:
                 raise ValueError(f"Unknown role: {role}")
-        input_text += "<|im_start|>assistant\n"
-        data = dict(
-            inputs=input_text,
-            parameters={
-                "max_new_tokens": 8192,
-                "temperature": 0.001,
-                "top_p": 0.95,
-                "stop": ["<|im_end|>"],
-                "stop_sequences": ["<|im_end|>"],
-                "skip_special_tokens": False,
-            },
-        )
+        if self.enable_thinking:
+            input_text += "<|im_start|>assistant\n<think>\n"
+        else:
+            input_text += "<|im_start|>assistant\n"
+
+        is_completions = self.baseUrl.rstrip("/").endswith("/completions")
+
+        if is_completions:
+            data = dict(
+                model=self.model_name,
+                prompt=input_text,
+                max_tokens=8192,
+                temperature=0.0,
+            )
+        else:
+            data = dict(
+                inputs=input_text,
+                parameters={
+                    "max_new_tokens": 8192,
+                    "temperature": 0.001,
+                    "top_p": 0.95,
+                    "stop": ["<|im_end|>"],
+                    "stop_sequences": ["<|im_end|>"],
+                    "skip_special_tokens": False,
+                },
+            )
+
         try:
-            raw = requests.post(self.baseUrl, data=json.dumps(data))
+            raw = requests.post(self.baseUrl, data=json.dumps(data), headers={"Content-Type": "application/json"})
             resp = raw.json()
         except Exception as e:
             print(f"API Error: {e}")
             raise
-        return resp["generated_text"][0].replace("<|im_end|>", ""), resp["count_output_tokens"]
+
+        if "generated_text" in resp:
+            return resp["generated_text"][0].replace("<|im_end|>", ""), resp.get("count_output_tokens", 0)
+        elif "choices" in resp:
+            text = resp["choices"][0]["text"].replace("<|im_end|>", "")
+            tokens = resp.get("usage", {}).get("completion_tokens", 0)
+            return text, tokens
+        else:
+            print(f"Unexpected API response (status {raw.status_code}): {resp}")
+            raise RuntimeError(f"API returned no 'generated_text' or 'choices'. Response: {resp}")
 
     def _call_openai_chat(self, messages: List[Dict]) -> tuple:
         """Call OpenAI-compatible endpoint using native tool calling."""
@@ -542,12 +525,16 @@ class SkillJupyterAgent:
                     "content": msg.get("content", ""),
                 })
             elif role == "assistant" and msg.get("tool_calls"):
-                # Preserve tool_calls so the API can match tool results to calls
-                chat_messages.append({
+                # Preserve tool_calls so the API can match tool results to calls.
+                # DeepSeek requires reasoning_content to always be present when tool calls exist,
+                # even if empty — omitting it causes a 400 error.
+                entry = {
                     "role": "assistant",
                     "content": msg.get("content") or "",
                     "tool_calls": msg["tool_calls"],
-                })
+                    "reasoning_content": msg.get("reasoning") or "",
+                }
+                chat_messages.append(entry)
             else:
                 chat_messages.append({"role": role, "content": msg.get("content", "")})
         try:
@@ -558,7 +545,8 @@ class SkillJupyterAgent:
                 tools=TOOLS_SCHEMA,
                 tool_choice="auto",
                 max_tokens=8192,
-                temperature=0.001,
+                temperature=0.0,
+                top_p=1.0,
             )
         except Exception as e:
             print(f"API Error: {e}")
@@ -659,7 +647,23 @@ class SkillJupyterAgent:
                  run_code_func: Any, path_info: Dict[str, str]) -> Dict[str, Any]:
 
         system_prompt = self._system_prompt_base
-        is_lightllm = self.baseUrl.rstrip("/").endswith("/generate")
+        stripped = self.baseUrl.rstrip("/")
+        is_lightllm = stripped.endswith("/generate") or stripped.endswith("/completions")
+
+        def _split_thinking(text: str):
+            """Split <think>...</think> from the rest of the message.
+            Returns (reasoning, content) where reasoning may be empty.
+            Also handles the case where the model continues after a <think> prefix
+            injected in the prompt (so generated_text starts mid-think without the tag).
+            """
+            import re as _re
+            m = _re.match(r"<think>(.*?)</think>\s*", text, _re.DOTALL)
+            if m:
+                return m.group(1).strip(), text[m.end():].strip()
+            m2 = _re.search(r"</think>\s*", text, _re.DOTALL)
+            if m2:
+                return text[:m2.start()].strip(), text[m2.end():].strip()
+            return "", text
 
         input_message = [
             {"role": "system", "content": system_prompt},
@@ -669,8 +673,6 @@ class SkillJupyterAgent:
         all_tokens = 0
         final_response = ""
         fail_times = 0
-        _recent_outputs = []
-        _LOOP_THRESHOLD = 3
 
         executor = JupyterKernelExecutor()
         try:
@@ -695,18 +697,10 @@ class SkillJupyterAgent:
                 if is_lightllm:
                     generated_message = response_obj  # str
 
-                    _recent_outputs.append(generated_message)
-                    if len(_recent_outputs) >= _LOOP_THRESHOLD:
-                        last_n = _recent_outputs[-_LOOP_THRESHOLD:]
-                        if all(x == last_n[0] for x in last_n):
-                            print(f"[Loop detected] Model repeated same output {_LOOP_THRESHOLD} times. Breaking.")
-                            text_only = re.sub(r'<tool_call>.*?</tool_call>', '', generated_message, flags=re.DOTALL).strip()
-                            final_response = text_only or generated_message
-                            break
-
                     if "<tool_call>" in generated_message:
-                        input_message.append({"role": "assistant", "content": generated_message})
-                        tool_calls = self._parse_tool_calls(generated_message)
+                        reasoning, content = _split_thinking(generated_message)
+                        input_message.append({"role": "assistant", "content": content, "reasoning": reasoning})
+                        tool_calls = self._parse_tool_calls(content)
                         for func_name, func_args in tool_calls:
                             try:
                                 result = self._execute_tool(func_name, func_args, executor, path_info)
@@ -714,31 +708,26 @@ class SkillJupyterAgent:
                                 result = f"Error executing {func_name}: {e}"
                             input_message.append({"role": "tool", "name": func_name, "content": result})
                         if not tool_calls:
-                            final_response = generated_message
+                            final_response = content
                             break
                     else:
-                        final_response = generated_message
-                        input_message.append({"role": "assistant", "content": generated_message})
+                        reasoning, content = _split_thinking(generated_message)
+                        final_response = content
+                        input_message.append({"role": "assistant", "content": content, "reasoning": reasoning})
                         break
 
                 # ---- OpenAI native tool calling path ----
                 else:
                     msg = response_obj  # ChatCompletionMessage
                     text_content = msg.content or ""
-
-                    _recent_outputs.append(text_content)
-                    if text_content and len(_recent_outputs) >= _LOOP_THRESHOLD:
-                        last_n = _recent_outputs[-_LOOP_THRESHOLD:]
-                        if all(x == last_n[0] for x in last_n):
-                            print(f"[Loop detected] Model repeated same output {_LOOP_THRESHOLD} times. Breaking.")
-                            final_response = text_content or "Error: loop detected with no text."
-                            break
+                    reasoning_content = getattr(msg, 'reasoning', None) or getattr(msg, 'reasoning_content', None) or ""
 
                     if msg.tool_calls:
                         # Append assistant message with tool_calls
                         assistant_entry = {
                             "role": "assistant",
                             "content": text_content,
+                            "reasoning": reasoning_content,
                             "tool_calls": [
                                 {
                                     "id": tc.id,
@@ -770,7 +759,7 @@ class SkillJupyterAgent:
                             })
                     else:
                         final_response = text_content
-                        input_message.append({"role": "assistant", "content": text_content})
+                        input_message.append({"role": "assistant", "content": text_content, "reasoning": reasoning_content})
                         break
 
         finally:
