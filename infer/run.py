@@ -130,33 +130,52 @@ def check_and_clean_failed_preds(output_dir):
     if count_conv > 0 or count_eval > 0:
         print(f"Cleanup finished. Removed {count_conv} inference files and {count_eval} eval files.")
 
+def _load_params_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def main():
+    # Pre-parse to detect --params before the main parser runs,
+    # so JSON values can fill in required arguments like --dataset/--api_key/--model_name.
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--params", default=None)
+    pre_args, remaining = pre_parser.parse_known_args()
+
+    json_defaults = {}
+    if pre_args.params:
+        json_defaults = _load_params_json(pre_args.params)
+
     parser = argparse.ArgumentParser(description="Unified Entry Point for OfficeBench Inference")
-    
+
     # Common arguments for all tasks
-    parser.add_argument("--dataset", required=True, help="Dataset name (e.g., chart, chart_mini)")
-    parser.add_argument("--api_key", required=True, help="API Key")
-    parser.add_argument("--base_url", default="", help="OpenAI Base URL (not needed for proxy_jupyter_agent)")
-    parser.add_argument("--model_name", required=True, help="Model Name to use")
-    parser.add_argument("--save_name", help="Name to use for saving results (default: model_name)")
-    parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel workers")
-    parser.add_argument("--data_root", default=os.path.join(os.getcwd(), "data"), help="Root directory for data files")
-    parser.add_argument("--output_path", help="Optional output path")
-    parser.add_argument("--data_path", help="Optional specific data path")
-    parser.add_argument("--prompt_file", help="Name of the prompt file in infer/prompts/ or absolute path")
-    parser.add_argument("--need_info", action="store_true", help="Enable file info enhancement (default: False)")
-    parser.add_argument("--agent_type", default="openai_jupyter_agent", help="Agent type to use. Choices: openai_jupyter_agent, proxy_jupyter_agent, openai_subprocess_agent, claude_jupyter_agent, claude_subprocess_agent. (default: openai_jupyter_agent)")
-    parser.add_argument("--max_rounds", type=int, default=20, help="Maximum number of rounds for the agent (default: 20)")
-    parser.add_argument("--channel_code", default="ali", help="Channel code for proxy agent (default: ali)")
-    parser.add_argument("--transaction_id", default="proxy_task", help="Transaction ID for proxy agent")
-    parser.add_argument("--enable_thinking", action="store_true", default=False, help="Enable thinking mode for proxy agent")
-    parser.add_argument("--skills_dir", default=None, help="Skills directory for skill_jupyter_agent (default: skills/)")
-    parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (default: 0.0)")
-    parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling parameter (default: 1.0)")
+    parser.add_argument("--params", default=None, help="Path to a JSON config file. Values are used as defaults and can be overridden by explicit CLI flags.")
+    parser.add_argument("--dataset", default=json_defaults.get("dataset"), required="dataset" not in json_defaults, help="Dataset name (e.g., chart, chart_mini)")
+    parser.add_argument("--api_key", default=json_defaults.get("api_key", ""), required="api_key" not in json_defaults, help="API Key")
+    parser.add_argument("--base_url", default=json_defaults.get("base_url", ""), help="OpenAI Base URL (not needed for proxy_jupyter_agent)")
+    parser.add_argument("--model_name", default=json_defaults.get("model_name"), required="model_name" not in json_defaults, help="Model Name to use")
+    parser.add_argument("--save_name", default=json_defaults.get("save_name"), help="Name to use for saving results (default: model_name)")
+    parser.add_argument("--num_workers", type=int, default=json_defaults.get("num_workers", 4), help="Number of parallel workers")
+    parser.add_argument("--data_root", default=json_defaults.get("data_root", os.path.join(os.getcwd(), "data")), help="Root directory for data files")
+    parser.add_argument("--output_path", default=json_defaults.get("output_path"), help="Optional output path")
+    parser.add_argument("--data_path", default=json_defaults.get("data_path"), help="Optional specific data path")
+    parser.add_argument("--prompt_file", default=json_defaults.get("prompt_file"), help="Name of the prompt file in infer/prompts/ or absolute path")
+    parser.add_argument("--need_info", action="store_true", default=json_defaults.get("need_info", False), help="Enable file info enhancement (default: False)")
+    parser.add_argument("--agent_type", default=json_defaults.get("agent_type", "openai_jupyter_agent"), help="Agent type to use.")
+    parser.add_argument("--max_rounds", type=int, default=json_defaults.get("max_rounds", 20), help="Maximum number of rounds for the agent (default: 20)")
+    parser.add_argument("--channel_code", default=json_defaults.get("channel_code", "ali"), help="Channel code for proxy agent (default: ali)")
+    parser.add_argument("--transaction_id", default=json_defaults.get("transaction_id", "proxy_task"), help="Transaction ID for proxy agent")
+    parser.add_argument("--enable_thinking", action="store_true", default=json_defaults.get("enable_thinking", False), help="Enable thinking mode for proxy agent")
+    parser.add_argument("--skills_dir", default=json_defaults.get("skills_dir"), help="Skills directory for skill_jupyter_agent (default: skills/)")
+    parser.add_argument("--temperature", type=float, default=json_defaults.get("temperature", 0.0), help="Sampling temperature (default: 0.0)")
+    parser.add_argument("--top_p", type=float, default=json_defaults.get("top_p", 1.0), help="Top-p sampling parameter (default: 1.0)")
+    parser.add_argument("--raccoon_project_uuid", default=json_defaults.get("raccoon_project_uuid", ""), help="Raccoon project UUID (xhx_pipeline only)")
+    parser.add_argument("--enable_web_search", action="store_true", default=json_defaults.get("enable_web_search", False), help="Enable web search in Raccoon (xhx_pipeline only)")
+    parser.add_argument("--deep_think", action="store_true", default=json_defaults.get("deep_think", False), help="Enable deep think mode in Raccoon (xhx_pipeline only)")
 
     # Capture all arguments
     args = parser.parse_args()
-    
+
     # Attach helper function to args so downstream runners can use it
     args.get_sys_msg_func = get_sys_msg
     # Get the directory where this script (infer/run.py) is located

@@ -14,5 +14,13 @@ DATASET_INFO = {
     "wps": {
         "file_path": "wps/wps.jsonl",
         "data_root_path": "wps/input",
-    }
+    },
+    "wps_1_1": {
+        "file_path": "wps_1_1/wps_1_1.jsonl",
+        "data_root_path": "wps_1_1/input_files",
+    },
+    "wps_2_0": {
+        "file_path": "wps_2_0/wps_2_0.jsonl",
+        "data_root_path": "wps_2_0/all_inputs",
+    },
 }

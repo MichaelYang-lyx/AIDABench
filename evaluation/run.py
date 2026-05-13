@@ -155,13 +155,22 @@ def main():
                     
             elif "qa" in dataset_lower or "numeric" in dataset_lower or "wps" in dataset_lower:
                 if 'score' in local_summary:
-                    key = 'wps_score' if 'wps' in dataset_lower else 'QA_score'
+                    if dataset_lower == 'wps_1_1':
+                        key = 'wps_1_1_score'
+                    elif dataset_lower == 'wps_2_0':
+                        key = 'wps_2_0_score'
+                    elif 'wps' in dataset_lower:
+                        key = 'wps_score'
+                    else:
+                        key = 'QA_score'
                     model_entry[key] = round(float(local_summary['score']), 4)
             
             # Reorder keys in model_entry
             ordered_keys = [
                 "QA_score",
                 "wps_score",
+                "wps_1_1_score",
+                "wps_2_0_score",
                 "data_visualization_correctness_score",
                 "data_visualization_readability_score",
                 "file_generation_score"

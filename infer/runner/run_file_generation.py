@@ -45,9 +45,17 @@ try:
 except ImportError:
     pass
 try:
+    from agents.lightllm_jupyter_agent import LightLLMJupyterAgent
+except ImportError:
+    pass
+try:
     from agents.hermes_agent import HermesAgent
 except ImportError:
     HermesAgent = None
+try:
+    from agents.xhx_pipeline import XHXPipelineAgent
+except ImportError:
+    XHXPipelineAgent = None
 try:
     from toolkits import CodeExecutionToolkit, generate_file_info_string, extract_workbook_summary3b
 except ImportError:
@@ -229,9 +237,13 @@ def run(args):
             use_proxy = True
         elif args.agent_type == 'skill_jupyter_agent':
             agent_class = SkillJupyterAgent
+        elif args.agent_type == 'lightllm_jupyter_agent':
+            agent_class = LightLLMJupyterAgent
         elif args.agent_type == 'hermes_agent':
             agent_class = HermesAgent
             use_hermes = True
+        elif args.agent_type == 'xhx_pipeline':
+            agent_class = XHXPipelineAgent
         elif 'jupyter' in args.agent_type:
             if args.agent_type == 'claude_jupyter_agent':
                 agent_class = ClaudeJupyterAgent
@@ -276,6 +288,20 @@ def run(args):
             data_root_path=agent_data_root,
             max_rounds=getattr(args, 'max_rounds', 20),
             skills_dir=getattr(args, 'skills_dir', None),
+            enable_thinking=getattr(args, 'enable_thinking', False),
+            temperature=getattr(args, 'temperature', 0.0),
+            top_p=getattr(args, 'top_p', 1.0)
+        )
+    elif XHXPipelineAgent and agent_class is XHXPipelineAgent:
+        agent = agent_class(
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model_name=args.model_name,
+            data_root_path=agent_data_root,
+            max_rounds=getattr(args, 'max_rounds', 20),
+            raccoon_project_uuid=getattr(args, 'raccoon_project_uuid', ''),
+            enable_web_search=getattr(args, 'enable_web_search', False),
+            deep_think=getattr(args, 'deep_think', False),
         )
     else:
         agent = agent_class(
@@ -284,6 +310,9 @@ def run(args):
             model_name=args.model_name,
             data_root_path=agent_data_root,
             max_rounds=getattr(args, 'max_rounds', 20),
+            enable_thinking=getattr(args, 'enable_thinking', False),
+            temperature=getattr(args, 'temperature', 0.0),
+            top_p=getattr(args, 'top_p', 1.0)
         )
 
     # Resolve Prompt Path
@@ -292,13 +321,9 @@ def run(args):
         if os.path.isabs(args.prompt_file):
             prompt_path = args.prompt_file
         else:
-            # Check in infer/prompts/
             current_dir = os.path.dirname(os.path.abspath(__file__))
             possible_path = os.path.join(os.path.dirname(current_dir), "prompts", args.prompt_file)
-            if os.path.exists(possible_path):
-                prompt_path = possible_path
-            else:
-                prompt_path = args.prompt_file # Fallback to relative to cwd
+            prompt_path = possible_path if os.path.exists(possible_path) else args.prompt_file
 
     # Run Inference
     runner = InferenceRunner(num_workers=args.num_workers)
