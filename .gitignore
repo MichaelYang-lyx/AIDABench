@@ -17,3 +17,4 @@ run_qwen30.sh
 run_qwenmax.sh
 yantao_output
 Edit-Banana
+configs/
