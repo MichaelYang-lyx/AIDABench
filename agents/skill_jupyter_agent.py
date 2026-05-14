@@ -426,7 +426,7 @@ class SkillJupyterAgent:
 
     def __init__(self, api_key: str, base_url: str, model_name: str,
                  data_root_path: str, max_rounds: int = 20,
-                 skills_dir: str = None, enable_thinking: bool = False, **kwargs):
+                 skills_dir: str = None, enable_thinking: str = None, **kwargs):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model_name = model_name
         self.data_root_path = data_root_path
@@ -469,8 +469,10 @@ class SkillJupyterAgent:
                 input_text += f"<|im_start|>user\n<tool_response>\n{content}\n</tool_response><|im_end|>\n"
             else:
                 raise ValueError(f"Unknown role: {role}")
-        if self.enable_thinking:
+        if self.enable_thinking == "think":
             input_text += "<|im_start|>assistant\n<think>\n"
+        elif self.enable_thinking == "nothink":
+            input_text += "<|im_start|>assistant\n<think>\n\n</think>\n"
         else:
             input_text += "<|im_start|>assistant\n"
 

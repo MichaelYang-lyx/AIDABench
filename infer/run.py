@@ -165,7 +165,7 @@ def main():
     parser.add_argument("--max_rounds", type=int, default=json_defaults.get("max_rounds", 20), help="Maximum number of rounds for the agent (default: 20)")
     parser.add_argument("--channel_code", default=json_defaults.get("channel_code", "ali"), help="Channel code for proxy agent (default: ali)")
     parser.add_argument("--transaction_id", default=json_defaults.get("transaction_id", "proxy_task"), help="Transaction ID for proxy agent")
-    parser.add_argument("--enable_thinking", action="store_true", default=json_defaults.get("enable_thinking", False), help="Enable thinking mode for proxy agent")
+    parser.add_argument("--enable_thinking", default=json_defaults.get("enable_thinking", None), help="Thinking mode: 'think' to enable thinking, 'nothink' to suppress thinking, omit for default behavior")
     parser.add_argument("--skills_dir", default=json_defaults.get("skills_dir"), help="Skills directory for skill_jupyter_agent (default: skills/)")
     parser.add_argument("--temperature", type=float, default=json_defaults.get("temperature", 0.0), help="Sampling temperature (default: 0.0)")
     parser.add_argument("--top_p", type=float, default=json_defaults.get("top_p", 1.0), help="Top-p sampling parameter (default: 1.0)")

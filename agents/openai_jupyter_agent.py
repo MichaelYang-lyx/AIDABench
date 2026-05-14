@@ -26,11 +26,12 @@ except ImportError:
         extract_workbook_summary3b = None
 
 class OpenAIJupyterAgent:
-    def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str, max_rounds: int = 20):
+    def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str, max_rounds: int = 20, enable_thinking: str = None, **kwargs):
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0)
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.max_rounds = max_rounds
+        self.enable_thinking = enable_thinking
         
         # Define the tools (OpenAI format)
         self.tools = [{
@@ -58,20 +59,26 @@ class OpenAIJupyterAgent:
                 # Determine actual model name and extra params for specific models
                 actual_model_name = self.model_name
                 extra_body_params = {}
-
+          
                 if self.model_name == "qwen3-max-2026-01-23-thinking":
                     actual_model_name = "qwen3-max-2026-01-23"
                     extra_body_params["enable_thinking"] = True
-
+                elif self.enable_thinking == "think":
+                    extra_body_params["enable_thinking"] = True
+                elif self.enable_thinking == "nothink":
+                    extra_body_params["enable_thinking"] = False
+                
                 response = self.client.chat.completions.create(
                     model=actual_model_name,
                     messages=messages,
                     tools=self.tools,
                     tool_choice="auto",
-                    temperature=0.0, # Deterministic
+                    temperature=0.0,
+                    top_p=1.0,
                     max_tokens=8192,
                     extra_body=extra_body_params if extra_body_params else None
                 )
+                # breakpoint()
                 if not response.choices:
                     raise Exception(f"Empty choices in response: {response}")
                 return response.choices[0].message, response.usage.completion_tokens
@@ -114,8 +121,26 @@ class OpenAIJupyterAgent:
             tool_calls = generated_message.tool_calls
             
             if tool_calls:
-                # Add assistant message with tool calls to history
-                input_message.append(generated_message.model_dump())
+                # Add assistant message with tool calls to history.
+                # reasoning_content must be included when tool calls are present (DeepSeek requirement).
+                assistant_entry = {
+                    "role": "assistant",
+                    "content": generated_message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in tool_calls
+                    ],
+                }
+                reasoning = getattr(generated_message, 'reasoning_content', None) or getattr(generated_message, 'reasoning', None)
+                assistant_entry["reasoning_content"] = reasoning or ""
+                input_message.append(assistant_entry)
                 
                 # Process each tool call
                 for tool_call in tool_calls:
@@ -157,7 +182,7 @@ class OpenAIJupyterAgent:
 
 
                                     code_to_exec = f"import matplotlib\nmatplotlib.use('Agg')\n{code_to_exec}"
-                                   
+                                    # breakpoint()
                                     res = run_code_func(code=code_to_exec)
 
                                     if len(str(res)) > 2000:

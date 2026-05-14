@@ -288,7 +288,7 @@ def run(args):
             data_root_path=agent_data_root,
             max_rounds=getattr(args, 'max_rounds', 20),
             skills_dir=getattr(args, 'skills_dir', None),
-            enable_thinking=getattr(args, 'enable_thinking', False),
+            enable_thinking=getattr(args, 'enable_thinking', None),
             temperature=getattr(args, 'temperature', 0.0),
             top_p=getattr(args, 'top_p', 1.0)
         )
@@ -310,7 +310,7 @@ def run(args):
             model_name=args.model_name,
             data_root_path=agent_data_root,
             max_rounds=getattr(args, 'max_rounds', 20),
-            enable_thinking=getattr(args, 'enable_thinking', False),
+            enable_thinking=getattr(args, 'enable_thinking', None),
             temperature=getattr(args, 'temperature', 0.0),
             top_p=getattr(args, 'top_p', 1.0)
         )
