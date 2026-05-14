@@ -350,9 +350,12 @@ class XHXPipelineAgent:
         raccoon_project_uuid: str = "",
         enable_web_search: bool = False,
         deep_think: bool = False,
+        enable_thinking: str = None,
         **kwargs,
     ):
         self.data_root_path = data_root_path
+        if enable_thinking is not None:
+            deep_think = (enable_thinking == "think")
         self._client = _RaccoonClient(
             project_uuid=raccoon_project_uuid,
             enable_web_search=enable_web_search,

@@ -1,0 +1,10 @@
+{
+  "agent_type": "xhx_pipeline",
+  "model_name": "raccoon-office-chat-1",
+  "save_name": "raccoon-office-chat-1",
+  "api_key": "dummy",
+  "num_workers": 10,
+  "raccoon_project_uuid": "",
+  "enable_thinking": "think",
+  "enable_web_search": false
+}
