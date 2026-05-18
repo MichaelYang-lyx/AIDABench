@@ -25,7 +25,7 @@ class HermesAgent:
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.save_name = save_name
-        self.timeout = max_rounds * 20  # rough seconds budget; override via max_rounds
+        self.timeout = max_rounds * 60  # rough seconds budget; override via max_rounds
         self.workspace_dir = WORKSPACE_DIR / save_name
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
