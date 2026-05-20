@@ -1,0 +1,37 @@
+{
+  "models": [
+    {
+      "name": "gemini-3.1-pro-preview",
+      "api_url": "https://your-proxy-or-api-url/v1",
+      "api_key": "your-api-key-here",
+      "model_id": "gemini-3.1-pro-preview",
+      "temperature": 0.7,
+      "max_tokens": 4096
+    },
+    {
+      "name": "claude-sonnet-4-5",
+      "api_url": "https://your-proxy-or-api-url/v1",
+      "api_key": "your-api-key-here",
+      "model_id": "claude-sonnet-4-5-20250929",
+      "temperature": 0.7,
+      "max_tokens": 4096
+    },
+    {
+      "name": "gpt-5.5",
+      "api_url": "https://your-proxy-or-api-url/v1",
+      "api_key": "your-api-key-here",
+      "model_id": "gpt-5.5",
+      "temperature": 0.7,
+      "max_tokens": 4096
+    }
+  ],
+  "consensus_threshold": 0.6,
+  "judge_model": {
+    "api_url": "https://your-proxy-or-api-url/v1",
+    "api_key": "your-api-key-here",
+    "model_id": "claude-opus-4-6",
+    "temperature": 0.3
+  },
+  "num_judge_runs": 5,
+  "judge_max_rounds": 30
+}
