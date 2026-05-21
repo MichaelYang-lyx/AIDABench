@@ -26,6 +26,7 @@ class RubricGenerator:
         consensus_findings: List[Dict],
         data_characteristics: Dict[str, Any] = None,
         non_consensus_findings: List[Dict] = None,
+        validated_l3_findings: List[Dict] = None,
     ) -> Dict[str, Any]:
         """Generate three-layer rubric.
 
@@ -33,6 +34,8 @@ class RubricGenerator:
             task_description: The original analysis task/question
             consensus_findings: List of consensus findings from ConsensusExtractor
             data_characteristics: Optional dict describing the data (e.g., data types, size)
+            non_consensus_findings: List of non-consensus findings
+            validated_l3_findings: Cross-validated findings for L3 (if provided, overrides non_consensus for L3)
 
         Returns:
             Dict with three layers:
@@ -45,7 +48,10 @@ class RubricGenerator:
         """
         # Format consensus findings
         consensus_text = self._format_consensus(consensus_findings)
-        non_consensus_text = self._format_non_consensus(non_consensus_findings)
+        if validated_l3_findings:
+            non_consensus_text = self._format_validated_l3(validated_l3_findings)
+        else:
+            non_consensus_text = self._format_non_consensus(non_consensus_findings)
         data_text = (
             json.dumps(data_characteristics, indent=2)
             if data_characteristics
@@ -63,7 +69,7 @@ class RubricGenerator:
 # Consensus Findings (from multiple strong models):
 {consensus_text}
 
-# Non-Consensus Findings (unique insights from individual models):
+# Non-Consensus Findings (cross-validated by other models):
 {non_consensus_text}
 
 # Instructions:
@@ -83,10 +89,8 @@ Universal quality dimensions independent of specific findings:
 Format: List of dicts with 'dimension', 'description', 'points' (total should be 30)
 
 **Layer 3 - Bonus Discovery (20% weight):**
-Based on the non-consensus findings listed above, evaluate each one:
-1. Is the finding factually reasonable given the task and data?
-2. Does it provide valuable insight beyond the consensus findings?
-Select at most 5 validated findings as bonus criteria. If no non-consensus findings are provided or none are valid, define what would constitute a valuable novel insight for this task.
+Based on the cross-validated non-consensus findings listed above (already confirmed by other models), create evaluation criteria for each one.
+These findings have been independently verified, so do NOT filter them out. Assign points to all of them (total should be 20).
 Format: List of dicts with 'criterion', 'description', 'points' (total should be 20)
 
 Output JSON:
@@ -138,10 +142,8 @@ Output JSON:
 格式：字典列表，包含 'dimension'（维度名称）、'description'（详细描述）、'points'（分值），总分应为 30 分。
 
 **第三层 - 额外发现加分（权重 20%）：**
-基于上述非共识发现，逐一评估：
-1. 该发现在给定任务和数据的背景下是否事实合理？
-2. 该发现是否提供了超出共识发现的有价值洞察？
-从中筛选出至多 5 个经验证合理且有价值的发现作为加分标准。如果没有提供非共识发现或没有合理的发现，则自行定义对于本任务而言什么构成"有价值的新发现"。
+以下是经过交叉验证的非共识发现（已由其他模型独立确认其正确性和价值）。
+请为每条发现编写评分标准，不要过滤掉任何一条，直接为所有发现分配分值（总分 20 分）。
 格式：字典列表，包含 'criterion'（标准名称）、'description'（详细描述）、'points'（分值），总分应为 20 分。
 
 请用中文输出所有 criterion/dimension/description 的内容。输出 JSON 格式如下：
@@ -229,4 +231,20 @@ Output JSON:
             models_str = ", ".join(models) if models else "unknown"
             evidence_str = evidence[0] if evidence else ""
             formatted.append(f"{i}. {pattern} (source: {models_str})\n   Evidence: {evidence_str}")
+        return "\n".join(formatted)
+
+    def _format_validated_l3(self, validated_findings: List[Dict]) -> str:
+        """Format cross-validated L3 findings for the prompt."""
+        if not validated_findings:
+            return "No cross-validated findings available."
+
+        formatted = []
+        for i, finding in enumerate(validated_findings, 1):
+            pattern = finding.get("pattern", "")
+            avg_score = finding.get("avg_score", 0)
+            source_models = finding.get("source_models", [])
+            source_str = ", ".join(source_models) if source_models else "unknown"
+            formatted.append(
+                f"{i}. {pattern} (validation score: {avg_score:.1f}/10, proposed by: {source_str})"
+            )
         return "\n".join(formatted)

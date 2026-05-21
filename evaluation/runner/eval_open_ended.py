@@ -172,6 +172,216 @@ def load_cached_consensus_and_rubric(cache_path: str, task_id: str) -> Tuple:
 
 
 # =============================================================================
+# L3 Cross-validation
+# =============================================================================
+
+def cross_validate_findings(
+    non_consensus_findings: List[Dict],
+    cache_path: str,
+    task_id: str,
+    config: Dict,
+    language: str = "zh",
+) -> List[Dict]:
+    """Cross-validate non-consensus findings by resuming other models' Hermes sessions.
+
+    For each finding (proposed by model A), resume models B and C's sessions
+    and ask them to score (0-10) whether the finding is factually correct and valuable.
+    Returns top 10 findings sorted by average validation score.
+    """
+    from agents.hermes_agent import HermesAgent
+
+    if not non_consensus_findings:
+        return []
+
+    # Load trace data for each reference model to get session_id and workspace
+    model_sessions = {}
+    task_cache_dir = get_task_cache_dir(cache_path, task_id)
+    if not os.path.isdir(task_cache_dir):
+        print(f"    Warning: Task cache dir not found: {task_cache_dir}")
+        return []
+
+    for item in os.listdir(task_cache_dir):
+        trace_path = os.path.join(task_cache_dir, item, "trace.json")
+        if os.path.isfile(trace_path):
+            try:
+                with open(trace_path, 'r', encoding='utf-8') as f:
+                    trace = json.load(f)
+                session_id = trace.get("hermes_session_id")
+                workspace = os.path.join(task_cache_dir, item, "workspace")
+                model_name = trace.get("model_name", item)
+                model_id = trace.get("model_id", "")
+                api_url = trace.get("api_url", "")
+                if session_id and os.path.isdir(workspace):
+                    # Find api_key from config
+                    api_key = ""
+                    for m in config.get("models", []):
+                        if m["name"] == model_name:
+                            api_key = m["api_key"]
+                            break
+                    model_sessions[model_name] = {
+                        "session_id": session_id,
+                        "workspace": workspace,
+                        "model_id": model_id,
+                        "api_url": api_url,
+                        "api_key": api_key,
+                        "profile": f"ref_{task_id}_{model_name.replace('/', '_').replace(' ', '_')}"[:64],
+                    }
+            except Exception:
+                continue
+
+    if len(model_sessions) < 2:
+        print(f"    Warning: Need at least 2 model sessions for cross-validation, found {len(model_sessions)}")
+        return []
+
+    print(f"    Loaded {len(model_sessions)} model sessions for cross-validation")
+
+    if language == "zh":
+        validation_prompt_template = """你之前已经分析过这份数据。现在请评估以下发现是否正确且有价值。
+你可以编写代码验证该发现的数值是否准确。
+
+## 待验证发现：
+{pattern}
+
+## 证据：
+{evidence}
+
+请打分（0-10分，10分表示完全正确且非常有价值）并简要说明理由。
+请严格按以下 JSON 格式输出（不要输出其他内容）：
+```json
+{{"score": X, "reason": "..."}}
+```"""
+    else:
+        validation_prompt_template = """You have already analyzed this dataset. Now evaluate whether the following finding is correct and valuable.
+You may write code to verify the numerical claims.
+
+## Finding to validate:
+{pattern}
+
+## Evidence:
+{evidence}
+
+Score this finding (0-10, where 10 means completely correct and highly valuable) and briefly explain.
+Output strictly in this JSON format:
+```json
+{{"score": X, "reason": "..."}}
+```"""
+
+    validated = []
+
+    for fi, finding in enumerate(non_consensus_findings):
+        pattern = finding.get("pattern", "")
+        evidence_list = finding.get("evidence", [])
+        source_models = finding.get("models", [])
+        evidence_str = "\n".join(str(e) for e in evidence_list if e) or "N/A"
+
+        prompt = validation_prompt_template.format(pattern=pattern, evidence=evidence_str)
+
+        scores = []
+        validations = []
+
+        for mname, minfo in model_sessions.items():
+            # Skip the model that proposed this finding
+            if mname in source_models:
+                continue
+
+            print(f"      [{fi+1}/{len(non_consensus_findings)}] Validating with {mname}...")
+
+            agent = HermesAgent(
+                api_key=minfo["api_key"],
+                base_url=minfo["api_url"],
+                model_name=minfo["model_id"],
+                data_root_path=minfo["workspace"],
+                save_name=minfo["profile"],
+                max_rounds=10,
+            )
+
+            result = agent.continue_session(
+                session_id=minfo["session_id"],
+                query=prompt,
+                work_dir=minfo["workspace"],
+            )
+
+            resp = result.get("model_response", "")
+            score = _parse_validation_score(resp)
+            scores.append(score)
+            validations.append({
+                "model": mname,
+                "score": score,
+                "raw_response": resp[:500],
+            })
+
+        avg_score = sum(scores) / len(scores) if scores else 0
+
+        validated.append({
+            "pattern": pattern,
+            "evidence": evidence_list,
+            "source_models": source_models,
+            "avg_score": avg_score,
+            "validations": validations,
+        })
+
+        print(f"      [{fi+1}/{len(non_consensus_findings)}] \"{pattern[:50]}...\" avg_score={avg_score:.1f}")
+
+    # Sort by score descending, take top 10
+    validated.sort(key=lambda x: x["avg_score"], reverse=True)
+    top_n = validated[:10]
+
+    print(f"    Cross-validation complete: {len(validated)} findings evaluated, top {len(top_n)} selected")
+    return top_n
+
+
+def _parse_validation_score(response: str) -> float:
+    """Parse a 0-10 score from the validation response."""
+    import re as _re
+    # Try JSON parse
+    try:
+        match = _re.search(r'```(?:json)?\s*(.*?)```', response, _re.DOTALL)
+        if match:
+            data = json.loads(match.group(1))
+            return float(data.get("score", 0))
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    try:
+        match = _re.search(r'\{[^{}]*"score"\s*:\s*(\d+(?:\.\d+)?)[^{}]*\}', response)
+        if match:
+            return float(match.group(1))
+    except (ValueError, AttributeError):
+        pass
+
+    # Fallback: look for "X/10" or "score: X"
+    try:
+        match = _re.search(r'(\d+(?:\.\d+)?)\s*/\s*10', response)
+        if match:
+            return float(match.group(1))
+        match = _re.search(r'[Ss]core\s*[:=：]\s*(\d+(?:\.\d+)?)', response)
+        if match:
+            return float(match.group(1))
+    except (ValueError, AttributeError):
+        pass
+
+    return 0.0
+
+
+def cache_cross_validation(cache_path: str, task_id: str, validated_findings: List[Dict]):
+    """Cache cross-validation results."""
+    task_dir = get_task_cache_dir(cache_path, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+    path = os.path.join(task_dir, "cross_validation.json")
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(validated_findings, f, ensure_ascii=False, indent=2)
+
+
+def load_cached_cross_validation(cache_path: str, task_id: str) -> List[Dict]:
+    """Load cached cross-validation results. Returns None if not cached."""
+    path = os.path.join(get_task_cache_dir(cache_path, task_id), "cross_validation.json")
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return None
+
+
+# =============================================================================
 # Reference model execution
 # =============================================================================
 
@@ -395,6 +605,24 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
             consensus_findings, non_consensus_findings = extractor.extract(valid_responses)
             print(f"  [Task {i+1}] Found {len(consensus_findings)} consensus, {len(non_consensus_findings)} non-consensus findings")
 
+            # Step 3.5: Cross-validate non-consensus findings (L3)
+            print(f"  [Task {i+1}] Cross-validating non-consensus findings...")
+            validated_l3 = None
+            if use_cache:
+                validated_l3 = load_cached_cross_validation(cache_path, task_id)
+                if validated_l3 is not None:
+                    print(f"  [Task {i+1}] Using cached cross-validation ({len(validated_l3)} findings)")
+
+            if validated_l3 is None:
+                validated_l3 = cross_validate_findings(
+                    non_consensus_findings=non_consensus_findings,
+                    cache_path=cache_path,
+                    task_id=task_id,
+                    config=config,
+                    language=getattr(args, 'language', 'zh'),
+                )
+                cache_cross_validation(cache_path, task_id, validated_l3)
+
             # Step 4: Generate rubric
             print(f"  [Task {i+1}] Generating three-layer rubric...")
             rubric_gen = RubricGenerator(
@@ -408,6 +636,7 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
                 consensus_findings=consensus_findings,
                 data_characteristics=task_info.get('metadata'),
                 non_consensus_findings=non_consensus_findings,
+                validated_l3_findings=validated_l3 if validated_l3 else None,
             )
 
             # Save to cache (overwrite)

@@ -194,3 +194,49 @@ class HermesAgent:
             "rounds": 0,
             "session_id": session_id,
         }
+
+    # ------------------------------------------------------------------
+    # continue_session — resume an existing session with a new query
+    # ------------------------------------------------------------------
+
+    def continue_session(
+        self,
+        session_id: str,
+        query: str,
+        work_dir: str,
+    ) -> Dict[str, Any]:
+        cmd = [
+            "hermes",
+            "--profile", self.save_name,
+            "--resume", session_id,
+            "chat",
+            "--query", query,
+            "--yolo",
+            "-Q",
+            "--max-turns", str(self.max_rounds),
+            "--model", self.model_name,
+        ]
+
+        model_response = ""
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=work_dir,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+            )
+            model_response = (proc.stdout or "").strip()
+
+            if proc.returncode != 0 and not model_response:
+                model_response = f"Error: hermes exited with code {proc.returncode}. stderr: {(proc.stderr or '')[:500]}"
+
+        except subprocess.TimeoutExpired:
+            model_response = f"Error: hermes timed out after {self.timeout}s"
+        except Exception as e:
+            model_response = f"Error: {e}"
+
+        return {
+            "model_response": model_response,
+            "session_id": session_id,
+        }
