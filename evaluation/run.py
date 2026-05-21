@@ -23,7 +23,10 @@ def main():
     parser.add_argument("--api_key", help="API Key for Evaluator Agent")
     parser.add_argument("--base_url", help="Base URL for Evaluator Agent")
     parser.add_argument("--evaluator_model", help="Model name for the evaluator agent (default: same as model_name)")
-    
+    parser.add_argument("--use_cache", action="store_true", help="Reuse cached consensus findings and rubrics (open_ended only)")
+    parser.add_argument("--cache_path", default=None, help="Path for consensus/rubric cache (open_ended only, default: output/reference_cache/{dataset})")
+    parser.add_argument("--language", default="zh", choices=["zh", "en"], help="Language for rubric generation (zh or en, open_ended only)")
+
     args = parser.parse_args()
     
     dataset = args.dataset  # preserve original casing for paths
@@ -116,6 +119,18 @@ def main():
             import traceback
             traceback.print_exc()
             sys.exit(1)
+    elif "open_ended" in dataset_lower or "open" in dataset_lower:
+        try:
+            from evaluation.runner.eval_open_ended import run as run_open_ended_eval
+            run_open_ended_eval(args)
+        except ImportError as e:
+            print(f"Error importing evaluation.runner.eval_open_ended: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error executing evaluation: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
     else:
         print(f"Dataset '{dataset}' not supported for evaluation yet.")
         sys.exit(1)
@@ -164,6 +179,26 @@ def main():
                     else:
                         key = 'QA_score'
                     model_entry[key] = round(float(local_summary['score']), 4)
+
+            elif "open_ended" in dataset_lower or "open" in dataset_lower:
+                if 'mean_score' in local_summary:
+                    model_entry['open_ended_score'] = round(float(local_summary['mean_score']), 4)
+                if 'layer1_score' in local_summary:
+                    model_entry['open_ended_layer1_score'] = round(float(local_summary['layer1_score']), 4)
+                if 'layer2_score' in local_summary:
+                    model_entry['open_ended_layer2_score'] = round(float(local_summary['layer2_score']), 4)
+                if 'layer3_score' in local_summary:
+                    model_entry['open_ended_layer3_score'] = round(float(local_summary['layer3_score']), 4)
+
+            elif "open_ended" in dataset_lower or "open" in dataset_lower:
+                if 'mean_score' in local_summary:
+                    model_entry['open_ended_score'] = round(float(local_summary['mean_score']), 4)
+                if 'layer1_score' in local_summary:
+                    model_entry['open_ended_layer1_score'] = round(float(local_summary['layer1_score']), 4)
+                if 'layer2_score' in local_summary:
+                    model_entry['open_ended_layer2_score'] = round(float(local_summary['layer2_score']), 4)
+                if 'layer3_score' in local_summary:
+                    model_entry['open_ended_layer3_score'] = round(float(local_summary['layer3_score']), 4)
             
             # Reorder keys in model_entry
             ordered_keys = [
@@ -173,7 +208,11 @@ def main():
                 "wps_2_0_score",
                 "data_visualization_correctness_score",
                 "data_visualization_readability_score",
-                "file_generation_score"
+                "file_generation_score",
+                "open_ended_score",
+                "open_ended_layer1_score",
+                "open_ended_layer2_score",
+                "open_ended_layer3_score"
             ]
             
             new_model_entry = {}

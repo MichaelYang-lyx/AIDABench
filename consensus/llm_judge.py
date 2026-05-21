@@ -32,7 +32,7 @@ class LLMJudge:
         analysis_output: str,
         rubric: Dict[str, Any],
         task_description: str,
-        num_runs: int = 5,
+        num_runs: int = 1,
         data_files: List[str] = None,
         model_output_workspace: str = None,
     ) -> Dict[str, Any]:
@@ -42,7 +42,7 @@ class LLMJudge:
             analysis_output: The model's analysis to evaluate
             rubric: Three-layer rubric from RubricGenerator
             task_description: The original task/question
-            num_runs: Number of independent evaluation runs (default: 5)
+            num_runs: Number of independent evaluation runs (default: 1)
             data_files: List of original data file paths (for Hermes mode)
             model_output_workspace: Path to the tested model's workspace (for Hermes mode)
 

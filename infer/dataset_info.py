@@ -23,4 +23,8 @@ DATASET_INFO = {
         "file_path": "wps_2_0/wps_2_0.jsonl",
         "data_root_path": "wps_2_0/all_inputs",
     },
+    "open_ended_test": {
+        "file_path": "open_ended_test/open_ended_test.jsonl",
+        "data_root_path": "open_ended_test",
+    },
 }

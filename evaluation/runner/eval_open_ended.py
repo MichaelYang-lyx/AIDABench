@@ -455,7 +455,7 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
             analysis_output=model_response,
             rubric=rubric,
             task_description=query,
-            num_runs=config.get('num_judge_runs', 5),
+            num_runs=config.get('num_judge_runs', 1),
             data_files=judge_data_files,
             model_output_workspace=model_workspace_path,
         )
@@ -504,7 +504,7 @@ def run(args):
     print(f"  - Loaded {len(config['models'])} reference models")
     print(f"  - Judge model: {config['judge_model']['model_id']}")
     print(f"  - Consensus threshold: {config.get('consensus_threshold', 0.6)}")
-    print(f"  - Number of judge runs: {config.get('num_judge_runs', 5)}")
+    print(f"  - Number of judge runs: {config.get('num_judge_runs', 1)}")
 
     use_cache = getattr(args, 'use_cache', False)
     cache_path = getattr(args, 'cache_path', None)
@@ -565,7 +565,7 @@ def run(args):
             "reference_models": [m['name'] for m in config['models']],
             "judge_model": config['judge_model']['model_id'],
             "consensus_threshold": config.get('consensus_threshold', 0.6),
-            "num_judge_runs": config.get('num_judge_runs', 5),
+            "num_judge_runs": config.get('num_judge_runs', 1),
             "use_cache": use_cache
         }
     }

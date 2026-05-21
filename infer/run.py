@@ -249,6 +249,18 @@ def main():
                 print(f"Error executing task: {e}")
                 sys.exit(1)
 
+        elif "open_ended" in ds_lower or "open" in ds_lower:
+            try:
+                from infer.runner.run_open_ended import run as run_open_ended_task
+                print(f"Dispatching to infer.runner.run_open_ended for dataset '{ds_name}'...")
+                run_open_ended_task(current_args)
+            except ImportError as e:
+                print(f"Error importing infer.runner.run_open_ended: {e}")
+                sys.exit(1)
+            except Exception as e:
+                print(f"Error executing task: {e}")
+                sys.exit(1)
+
         else:
             print(f"Dataset '{ds_name}' is not currently supported by this runner.")
             print("Supported datasets: data_visualization, QA, generation, ppt, doc, excel, numerical")

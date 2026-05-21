@@ -1,13 +1,12 @@
 import os
 import re
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WORKSPACE_DIR = PROJECT_ROOT / "workspaces"
+DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "workspaces"
 HERMES_DIR = Path.home() / ".hermes"
 
 
@@ -25,9 +24,8 @@ class HermesAgent:
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.save_name = save_name
-        self.timeout = max_rounds * 60  # rough seconds budget; override via max_rounds
-        self.workspace_dir = WORKSPACE_DIR / save_name
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.max_rounds = max_rounds
+        self.timeout = max_rounds * 120
 
         self._setup_profile(api_key, base_url, model_name, save_name)
 
@@ -65,13 +63,11 @@ class HermesAgent:
     # Workspace helpers
     # ------------------------------------------------------------------
 
-    def _prepare_workspace(self, task_id: str, real_input_files: list[str]) -> Path:
-        work_dir = self.workspace_dir / str(task_id)
-        work_dir.mkdir(parents=True, exist_ok=True)
+    def _prepare_workspace(self, workspace_dir: Path, real_input_files: list[str]) -> Path:
+        workspace_dir.mkdir(parents=True, exist_ok=True)
 
-        inputs_dir = work_dir / "inputs"
+        inputs_dir = workspace_dir / "inputs"
         inputs_dir.mkdir(exist_ok=True)
-        (work_dir / "outputs").mkdir(exist_ok=True)
 
         for src in real_input_files:
             src_path = Path(src)
@@ -80,17 +76,7 @@ class HermesAgent:
                 if not dst.exists() and not dst.is_symlink():
                     dst.symlink_to(src_path.resolve())
 
-        return work_dir
-
-    def _copy_outputs(self, work_dir: Path, real_output_dir: str):
-        """Copy files produced in work_dir/outputs/ to the AIDABench output dir."""
-        src = work_dir / "outputs"
-        if not src.is_dir():
-            return
-        dst = Path(real_output_dir)
-        dst.mkdir(parents=True, exist_ok=True)
-        for f in src.iterdir():
-            shutil.copy2(f, dst / f.name)
+        return workspace_dir
 
     # ------------------------------------------------------------------
     # Session trace
@@ -120,15 +106,19 @@ class HermesAgent:
         path_info: Dict[str, str],
     ) -> Dict[str, Any]:
         real_input_dir = path_info.get("real_input_dir", self.data_root_path)
-        real_output_dir = path_info.get("real_output_dir", "")
 
         # task_id: prefer explicit field, then derive from real_output_dir last segment
-        # (runner constructs real_output_dir as .../pictures/<task_id> or .../generated_files/<task_id>)
         task_id = path_info.get("task_id")
         if not task_id and real_output_dir:
             task_id = Path(real_output_dir).name
         if not task_id:
             task_id = str(abs(hash(query)) % 10**9)
+
+        # Determine workspace directory
+        if path_info.get("workspace_dir"):
+            workspace_dir = Path(path_info["workspace_dir"])
+        else:
+            workspace_dir = DEFAULT_WORKSPACE_DIR / self.save_name / str(task_id)
 
         # Collect input files to symlink: real_input_dir is already the task-level dir
         # (e.g. data/data_visualization/Q001/), so take all files directly inside it
@@ -138,7 +128,7 @@ class HermesAgent:
                 str(p) for p in Path(real_input_dir).iterdir() if p.is_file()
             ]
 
-        work_dir = self._prepare_workspace(task_id, real_input_files)
+        work_dir = self._prepare_workspace(workspace_dir, real_input_files)
 
         # Rewrite virtual mount paths in query to workspace-relative paths.
         # hermes runs with cwd=work_dir, so ./inputs and ./outputs resolve correctly.
@@ -159,7 +149,7 @@ class HermesAgent:
             "--query", hermes_query,
             "--yolo",
             "-Q",
-            "--max-turns", "90",
+            "--max-turns", str(self.max_rounds),
             "--model", self.model_name,
         ]
 
@@ -196,10 +186,6 @@ class HermesAgent:
             model_response = f"Error: hermes timed out after {self.timeout}s"
         except Exception as e:
             model_response = f"Error: {e}"
-
-        # Copy outputs back to AIDABench output dir
-        if real_output_dir:
-            self._copy_outputs(work_dir, real_output_dir)
 
         return {
             "model_response": model_response,
