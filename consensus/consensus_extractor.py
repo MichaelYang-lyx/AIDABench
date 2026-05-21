@@ -19,6 +19,7 @@ class ConsensusExtractor:
         base_url: str,
         model_name: str,
         consensus_threshold: float = 0.6,
+        language: str = "zh",
     ):
         """
         Args:
@@ -26,10 +27,12 @@ class ConsensusExtractor:
             base_url: Base URL for the extraction model
             model_name: Model to use for semantic alignment
             consensus_threshold: Minimum fraction of models that must mention a finding (default: 0.6)
+            language: Output language for findings (default: "zh")
         """
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model_name = model_name
         self.consensus_threshold = consensus_threshold
+        self.language = language
 
     def extract(
         self, analysis_results: List[Dict[str, Any]]
@@ -51,7 +54,7 @@ class ConsensusExtractor:
         n_models = len(analysis_results)
         analyses_text = self._format_analyses(analysis_results)
 
-        prompt = f"""You are analyzing {n_models} independent data analysis results from different AI models.
+        prompt_en = f"""You are analyzing {n_models} independent data analysis results from different AI models.
 Your task is to identify ALL distinct patterns and findings across these analyses, including those mentioned by only a single model.
 
 # Analysis Results:
@@ -80,11 +83,47 @@ Output a JSON object with this structure:
 Be precise. Only group findings that are semantically equivalent. Include ALL findings regardless of how many models mentioned them.
 """
 
+        prompt_zh = f"""你正在分析 {n_models} 个不同 AI 模型独立产出的数据分析结果。
+你的任务是识别这些分析中所有不同的模式和发现，包括仅被单个模型提到的发现。
+
+# 分析结果：
+{analyses_text}
+
+# 要求：
+1. 识别所有分析中提到的所有不同模式/发现
+2. 对于每个模式，判断哪些模型提到了它（使用语义相似性，而非精确措辞匹配）
+3. 计算频率（提到该发现的模型占比）
+4. 从每个模型的分析中提取支持证据
+5. 重要：不要遗漏仅被一个模型提到的发现。这些独特洞察很有价值，必须以正确的频率包含（例如 1/{n_models} = {1/n_models:.2f}）
+
+请用中文输出所有 pattern 和 evidence 的内容。输出 JSON 格式如下：
+{{
+  "findings": [
+    {{
+      "pattern": "发现的简要描述",
+      "evidence": ["模型1的证据引用", "模型2的证据引用", ...],
+      "frequency": 0.8,
+      "models": ["model_name_1", "model_name_2", ...]
+    }},
+    ...
+  ]
+}}
+
+请精确分组，只将语义等价的发现归为一组。无论有多少模型提到，都必须包含所有发现。
+"""
+
+        prompt = prompt_zh if self.language == "zh" else prompt_en
+        system_msg = (
+            "你是一位数据分析结果对比和共识提取专家。"
+            if self.language == "zh"
+            else "You are an expert at analyzing and comparing data analysis results."
+        )
+
         # Call LLM for extraction
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=[
-                {"role": "system", "content": "You are an expert at analyzing and comparing data analysis results."},
+                {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.0,

@@ -8,7 +8,7 @@ Supports Hermes-based evaluation (code execution for verification).
 import json
 import os
 import re
-import shutil
+
 import statistics
 from pathlib import Path
 from typing import Dict, Any, List
@@ -35,6 +35,7 @@ class LLMJudge:
         num_runs: int = 1,
         data_files: List[str] = None,
         model_output_workspace: str = None,
+        judge_workspace_dir: str = None,
     ) -> Dict[str, Any]:
         """Evaluate an analysis output against a rubric.
 
@@ -45,6 +46,7 @@ class LLMJudge:
             num_runs: Number of independent evaluation runs (default: 1)
             data_files: List of original data file paths (for Hermes mode)
             model_output_workspace: Path to the tested model's workspace (for Hermes mode)
+            judge_workspace_dir: Directory to store judge workspace (preserved after eval)
 
         Returns:
             Dict with scores, mean_score, std_score, variance, layer_scores, detailed_feedback
@@ -59,6 +61,7 @@ class LLMJudge:
                     analysis_output, rubric, task_description, run_idx,
                     data_files=data_files,
                     model_output_workspace=model_output_workspace,
+                    judge_workspace_dir=judge_workspace_dir,
                 )
             else:
                 result = self._single_evaluation(
@@ -97,6 +100,7 @@ class LLMJudge:
         run_idx: int,
         data_files: List[str] = None,
         model_output_workspace: str = None,
+        judge_workspace_dir: str = None,
     ) -> Dict[str, Any]:
         """Perform evaluation using HermesAgent with code execution."""
         from agents.hermes_agent import HermesAgent
@@ -104,10 +108,13 @@ class LLMJudge:
         rubric_text = self._format_rubric(rubric)
 
         # Prepare judge workspace
-        judge_workspace = Path(os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "workspaces", "judge", f"run_{run_idx}_{os.getpid()}"
-        ))
+        if judge_workspace_dir:
+            judge_workspace = Path(judge_workspace_dir) / f"run_{run_idx}"
+        else:
+            judge_workspace = Path(os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "workspaces", "judge", f"run_{run_idx}_{os.getpid()}"
+            ))
         judge_workspace.mkdir(parents=True, exist_ok=True)
 
         # Write model response to workspace
@@ -203,12 +210,6 @@ class LLMJudge:
         # Parse the result
         content = hermes_result.get("model_response", "")
         result = self._parse_judge_result(content, run_idx)
-
-        # Cleanup workspace
-        try:
-            shutil.rmtree(str(judge_workspace))
-        except Exception:
-            pass
 
         return result
 

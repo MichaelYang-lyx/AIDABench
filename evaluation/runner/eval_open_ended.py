@@ -389,7 +389,8 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
                 api_key=config['judge_model']['api_key'],
                 base_url=config['judge_model']['api_url'],
                 model_name=config['judge_model']['model_id'],
-                consensus_threshold=config.get('consensus_threshold', 0.6)
+                consensus_threshold=config.get('consensus_threshold', 0.6),
+                language=getattr(args, 'language', 'zh'),
             )
             consensus_findings, non_consensus_findings = extractor.extract(valid_responses)
             print(f"  [Task {i+1}] Found {len(consensus_findings)} consensus, {len(non_consensus_findings)} non-consensus findings")
@@ -451,6 +452,8 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
             if os.path.isdir(candidate):
                 model_workspace_path = candidate
 
+        judge_workspace_dir = os.path.join(args.output_path, "workspace", task_id)
+
         eval_result = judge.evaluate(
             analysis_output=model_response,
             rubric=rubric,
@@ -458,6 +461,7 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
             num_runs=config.get('num_judge_runs', 1),
             data_files=judge_data_files,
             model_output_workspace=model_workspace_path,
+            judge_workspace_dir=judge_workspace_dir,
         )
 
         row['score'] = eval_result.get('mean_score', 0)
