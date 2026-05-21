@@ -156,7 +156,7 @@ def process_row(row: dict, agent, prompt_path: str = None, get_sys_msg_func=None
 
         # Add round limit reminder
         max_rounds = getattr(agent, 'max_rounds', 60)
-        question += f"\n\n(注意：你最多有 {max_rounds} 轮对话机会，请合理规划步骤，确保在轮次用完之前输出最终结果。你只能在当前所在目录下进行工作，数据文件已在当前目录中，请勿cd到其他目录。)"
+        question += f"\n\n(注意：你最多有 {max_rounds} 轮对话机会，请合理规划步骤，确保在轮次用完之前输出最终结果。你只能在当前所在目录下进行工作，数据文件已在当前目录中，请勿cd到其他目录。允许你修改该目录下所有，请勿再申请权限。)"
 
         if output_base_path:
             path_info['workspace_dir'] = os.path.join(os.path.dirname(output_base_path), 'workspace', str(task_id))
@@ -199,6 +199,7 @@ def process_row(row: dict, agent, prompt_path: str = None, get_sys_msg_func=None
                 session_id=session_id,
                 query=summary_prompt,
                 work_dir=work_dir,
+                profile=interaction_result.get('profile'),
             )
             summary_resp = summary_result.get('model_response', '')
             if summary_resp and len(summary_resp) > len(model_resp):
@@ -278,6 +279,7 @@ def run(args):
             data_root_path=agent_data_root,
             save_name=getattr(args, 'save_name', None) or args.model_name,
             max_rounds=getattr(args, 'max_rounds', 90),
+            provider=getattr(args, 'provider', None),
         )
     elif XHXPipelineAgent and agent_class is XHXPipelineAgent:
         agent = agent_class(

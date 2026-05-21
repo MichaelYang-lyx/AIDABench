@@ -19,12 +19,13 @@ class LLMJudge:
     """Evaluates analysis outputs using LLM-as-judge with three-layer rubric."""
 
     def __init__(self, api_key: str, base_url: str, model_name: str,
-                 use_hermes: bool = False, max_rounds: int = 30):
+                 use_hermes: bool = False, max_rounds: int = 30, provider: str = None):
         self.api_key = api_key
         self.base_url = base_url
         self.model_name = model_name
         self.use_hermes = use_hermes
         self.max_rounds = max_rounds
+        self.provider = provider
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
     def evaluate(
@@ -192,6 +193,7 @@ class LLMJudge:
             data_root_path=str(judge_workspace),
             save_name=profile_name,
             max_rounds=self.max_rounds,
+            provider=self.provider,
         )
 
         path_info = {

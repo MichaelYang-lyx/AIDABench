@@ -19,15 +19,18 @@ class HermesAgent:
         data_root_path: str,
         save_name: str,
         max_rounds: int = 90,
+        provider: str = None,
         **kwargs,
     ):
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.save_name = save_name
+        self.profile_name = re.sub(r'[^a-z0-9_-]', '-', save_name.lower())[:64]
         self.max_rounds = max_rounds
         self.timeout = max_rounds * 120
-
-        self._setup_profile(api_key, base_url, model_name, save_name)
+        self._api_key = api_key
+        self._base_url = base_url
+        self._provider = provider or "custom"
 
     # ------------------------------------------------------------------
     # Profile setup
@@ -46,16 +49,26 @@ class HermesAgent:
             )
         return result
 
-    def _setup_profile(self, api_key: str, base_url: str, model_name: str, profile: str):
+    def _setup_profile(self, api_key: str, base_url: str, model_name: str, profile: str, provider: str):
         # Create profile (ignore error if already exists)
         self._run_hermes_cmd(["profile", "create", profile], check=False)
 
+        # For non-custom providers, strip trailing /v1 from base_url to avoid double path
+        effective_url = base_url
+        if provider != "custom" and effective_url:
+            effective_url = effective_url.rstrip("/")
+            if effective_url.endswith("/v1"):
+                effective_url = effective_url[:-3]
+
         configs = [
             ("model.default", model_name),
-            ("model.provider", "custom"),
-            ("model.base_url", base_url),
+            ("model.provider", provider),
             ("model.api_key", api_key),
+            ("terminal.timeout", "1200"),
         ]
+        if effective_url:
+            configs.append(("model.base_url", effective_url))
+
         for key, value in configs:
             self._run_hermes_cmd(["--profile", profile, "config", "set", key, value])
 
@@ -82,9 +95,76 @@ class HermesAgent:
     # Session trace
     # ------------------------------------------------------------------
 
-    def _load_session(self, session_id: str) -> Any:
-        # hermes stores sessions under ~/.hermes/profiles/<profile>/sessions/ when using a profile
-        profile_path = HERMES_DIR / "profiles" / self.save_name / "sessions" / f"session_{session_id}.json"
+    def _load_session(self, session_id: str, profile_name: str = None) -> Any:
+        """Load session from Hermes SQLite store (v0.14+) or legacy JSON files."""
+        import sqlite3
+        profile = profile_name or self.profile_name
+
+        # Try SQLite first (new Hermes)
+        for db_path in [
+            HERMES_DIR / "profiles" / profile / "state.db",
+            HERMES_DIR / "state.db",
+        ]:
+            if not db_path.exists():
+                continue
+            try:
+                conn = sqlite3.connect(str(db_path))
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT id, model, started_at, ended_at, system_prompt, message_count "
+                    "FROM sessions WHERE id=?", (session_id,)
+                )
+                row = cur.fetchone()
+                if not row:
+                    conn.close()
+                    continue
+
+                from datetime import datetime
+                session_data = {
+                    "session_id": row[0],
+                    "model": row[1],
+                    "session_start": datetime.fromtimestamp(row[2]).isoformat() if row[2] else "",
+                    "last_updated": datetime.fromtimestamp(row[3]).isoformat() if row[3] else "",
+                    "system_prompt": row[4] or "",
+                    "message_count": row[5] or 0,
+                    "messages": [],
+                }
+                # Fallback: derive last_updated from message timestamps if ended_at is NULL
+                if not session_data["last_updated"]:
+                    cur.execute(
+                        "SELECT MAX(timestamp) FROM messages WHERE session_id=?", (session_id,)
+                    )
+                    max_ts = cur.fetchone()
+                    if max_ts and max_ts[0]:
+                        session_data["last_updated"] = datetime.fromtimestamp(max_ts[0]).isoformat()
+
+                cur.execute(
+                    "SELECT role, content, tool_calls, tool_name, finish_reason "
+                    "FROM messages WHERE session_id=? ORDER BY id", (session_id,)
+                )
+                for msg_row in cur.fetchall():
+                    role, content, tool_calls_json, tool_name, finish_reason = msg_row
+                    msg = {"role": role, "content": content or "", "finish_reason": finish_reason}
+                    if tool_calls_json:
+                        try:
+                            msg["tool_calls"] = json.loads(tool_calls_json)
+                        except Exception:
+                            pass
+                    if tool_name:
+                        msg["tool_name"] = tool_name
+                    session_data["messages"].append(msg)
+
+                conn.close()
+                return session_data
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
+
+        # Fallback: legacy JSON files
+        profile_path = HERMES_DIR / "profiles" / profile / "sessions" / f"session_{session_id}.json"
         global_path = HERMES_DIR / "sessions" / f"session_{session_id}.json"
         src = profile_path if profile_path.exists() else global_path
         if not src.exists():
@@ -93,6 +173,47 @@ class HermesAgent:
             return json.loads(src.read_text(encoding="utf-8"))
         except Exception:
             return None
+
+    @staticmethod
+    def _extract_session_trace(history: list) -> Dict[str, Any]:
+        """Extract rounds, total_tokens, timing, and tool_calls from session data."""
+        empty = {"rounds": 0, "total_tokens": 0, "duration_seconds": 0, "tool_calls": []}
+        if not history:
+            return empty
+        session = history[0] if isinstance(history[0], dict) else {}
+        messages = session.get("messages", [])
+        if not messages:
+            return empty
+
+        rounds = len(messages)
+        total_tokens = sum(len(str(m.get("content", ""))) for m in messages) // 4
+
+        start = session.get("session_start", "")
+        end = session.get("last_updated", "")
+        duration = 0.0
+        if start and end:
+            from datetime import datetime
+            try:
+                t0 = datetime.fromisoformat(start)
+                t1 = datetime.fromisoformat(end)
+                duration = (t1 - t0).total_seconds()
+            except Exception:
+                pass
+
+        tool_calls = {}
+        for m in messages:
+            if m.get("role") == "assistant" and "tool_calls" in m:
+                for tc in m["tool_calls"]:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "unknown")
+                    tool_calls[name] = tool_calls.get(name, 0) + 1
+
+        return {
+            "rounds": rounds,
+            "total_tokens": total_tokens,
+            "duration_seconds": round(duration, 2),
+            "tool_calls": tool_calls,
+        }
 
     # ------------------------------------------------------------------
     # interact
@@ -107,10 +228,10 @@ class HermesAgent:
     ) -> Dict[str, Any]:
         real_input_dir = path_info.get("real_input_dir", self.data_root_path)
 
-        # task_id: prefer explicit field, then derive from real_output_dir last segment
+        # task_id: prefer explicit field, then derive from workspace_dir last segment
         task_id = path_info.get("task_id")
-        if not task_id and real_output_dir:
-            task_id = Path(real_output_dir).name
+        if not task_id and path_info.get("workspace_dir"):
+            task_id = Path(path_info["workspace_dir"]).name
         if not task_id:
             task_id = str(abs(hash(query)) % 10**9)
 
@@ -142,9 +263,13 @@ class HermesAgent:
         # fallback: some runners use /mnt/output instead of /mnt/result
         hermes_query = hermes_query.replace("/mnt/output", "./outputs")
 
+        # Per-task profile to avoid SQLite lock contention under concurrency
+        task_profile = re.sub(r'[^a-z0-9_-]', '-', f"{self.save_name}_{task_id}".lower())[:64]
+        self._setup_profile(self._api_key, self._base_url, self.model_name, task_profile, self._provider)
+
         cmd = [
             "hermes",
-            "--profile", self.save_name,
+            "--profile", task_profile,
             "chat",
             "--query", hermes_query,
             "--yolo",
@@ -157,6 +282,11 @@ class HermesAgent:
         model_response = ""
         history = []
 
+        env = os.environ.copy()
+        env["ANTHROPIC_API_KEY"] = self._api_key
+        if self._base_url:
+            env["ANTHROPIC_BASE_URL"] = self._base_url
+
         try:
             proc = subprocess.run(
                 cmd,
@@ -164,6 +294,7 @@ class HermesAgent:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
+                env=env,
             )
             stdout = proc.stdout or ""
             stderr = proc.stderr or ""
@@ -172,12 +303,20 @@ class HermesAgent:
             if m:
                 session_id = m.group(1)
 
-            model_response = stdout.strip()
-
             if session_id:
-                session_data = self._load_session(session_id)
+                session_data = self._load_session(session_id, task_profile)
                 if session_data:
                     history = session_data if isinstance(session_data, list) else [session_data]
+                    # Extract model_response from last assistant message in history
+                    messages = session_data.get("messages", [])
+                    for msg in reversed(messages):
+                        if msg.get("role") == "assistant" and msg.get("content", "").strip():
+                            model_response = msg["content"].strip()
+                            break
+
+            # Fallback to stdout if history extraction failed
+            if not model_response:
+                model_response = stdout.strip()
 
             if proc.returncode != 0 and not model_response:
                 model_response = f"Error: hermes exited with code {proc.returncode}. stderr: {stderr[:500]}"
@@ -187,12 +326,17 @@ class HermesAgent:
         except Exception as e:
             model_response = f"Error: {e}"
 
+        trace = self._extract_session_trace(history)
+
         return {
             "model_response": model_response,
             "history": history,
-            "total_tokens": 0,
-            "rounds": 0,
+            "total_tokens": trace["total_tokens"],
+            "rounds": trace["rounds"],
+            "duration_seconds": trace["duration_seconds"],
+            "tool_calls": trace["tool_calls"],
             "session_id": session_id,
+            "profile": task_profile,
         }
 
     # ------------------------------------------------------------------
@@ -204,10 +348,12 @@ class HermesAgent:
         session_id: str,
         query: str,
         work_dir: str,
+        profile: str = None,
     ) -> Dict[str, Any]:
+        use_profile = profile or self.profile_name
         cmd = [
             "hermes",
-            "--profile", self.save_name,
+            "--profile", use_profile,
             "--resume", session_id,
             "chat",
             "--query", query,

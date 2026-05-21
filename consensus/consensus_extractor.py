@@ -29,7 +29,7 @@ class ConsensusExtractor:
             consensus_threshold: Minimum fraction of models that must mention a finding (default: 0.6)
             language: Output language for findings (default: "zh")
         """
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=600, max_retries=3)
         self.model_name = model_name
         self.consensus_threshold = consensus_threshold
         self.language = language

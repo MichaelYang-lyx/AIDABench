@@ -214,9 +214,11 @@ def cross_validate_findings(
                 if session_id and os.path.isdir(workspace):
                     # Find api_key from config
                     api_key = ""
+                    provider = None
                     for m in config.get("models", []):
                         if m["name"] == model_name:
                             api_key = m["api_key"]
+                            provider = m.get("provider")
                             break
                     model_sessions[model_name] = {
                         "session_id": session_id,
@@ -224,6 +226,7 @@ def cross_validate_findings(
                         "model_id": model_id,
                         "api_url": api_url,
                         "api_key": api_key,
+                        "provider": provider,
                         "profile": f"ref_{task_id}_{model_name.replace('/', '_').replace(' ', '_')}"[:64],
                     }
             except Exception:
@@ -293,6 +296,7 @@ Output strictly in this JSON format:
                 data_root_path=minfo["workspace"],
                 save_name=minfo["profile"],
                 max_rounds=10,
+                provider=minfo.get("provider"),
             )
 
             result = agent.continue_session(
@@ -303,6 +307,10 @@ Output strictly in this JSON format:
 
             resp = result.get("model_response", "")
             score = _parse_validation_score(resp)
+            if score == 0 and resp:
+                print(f"        [DEBUG] {mname} response (first 200): {resp[:200]}")
+            elif not resp:
+                print(f"        [DEBUG] {mname} returned empty response")
             scores.append(score)
             validations.append({
                 "model": mname,
@@ -430,7 +438,8 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                 model_name=model['model_id'],
                 data_root_path=model_dir,  # Parent directory, not inputs itself
                 save_name=profile_name,
-                max_rounds=model.get('max_rounds', 20)
+                max_rounds=model.get('max_rounds', 20),
+                provider=model.get('provider'),
             )
 
             # Prepare path_info for hermes
@@ -544,6 +553,17 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
     """Process a single open-ended task using full ConsensusEval pipeline with caching."""
     row.pop('history', None)
 
+    result_path = get_result_file_path(row, i, args)
+    if os.path.exists(result_path):
+        try:
+            with open(result_path, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+            if 'score' in existing and 'error' not in existing:
+                print(f"  [Task {i+1}] Already evaluated, skipping.")
+                return existing
+        except (json.JSONDecodeError, IOError):
+            pass
+
     model_response = row.get('answer') or row.get('model_response') or row.get('analysis', '')
     task_id = row.get('id') or row.get('task_id', f"task_{i}")
     query = row.get('query', '')
@@ -654,6 +674,7 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
             model_name=config['judge_model']['model_id'],
             use_hermes=True,
             max_rounds=config.get('judge_max_rounds', 30),
+            provider=config['judge_model'].get('provider'),
         )
 
         # Resolve data files and model workspace for Hermes judge
