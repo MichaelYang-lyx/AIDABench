@@ -156,7 +156,7 @@ def process_row(row: dict, agent, prompt_path: str = None, get_sys_msg_func=None
 
         # Add round limit reminder
         max_rounds = getattr(agent, 'max_rounds', 60)
-        question += f"\n\n(注意：你最多有 {max_rounds} 轮对话机会，请合理规划步骤，确保在轮次用完之前输出最终结果。)"
+        question += f"\n\n(注意：你最多有 {max_rounds} 轮对话机会，请合理规划步骤，确保在轮次用完之前输出最终结果。你只能在当前所在目录下进行工作，数据文件已在当前目录中，请勿cd到其他目录。)"
 
         if output_base_path:
             path_info['workspace_dir'] = os.path.join(os.path.dirname(output_base_path), 'workspace', str(task_id))
@@ -179,6 +179,30 @@ def process_row(row: dict, agent, prompt_path: str = None, get_sys_msg_func=None
                 or len(output_content) > len(model_resp) * 2
             ):
                 interaction_result['model_response'] = output_content
+
+        # Fallback: if response is still empty/useless and we have a session, resume to extract summary
+        model_resp = interaction_result.get('model_response', '')
+        _is_useless = (
+            not model_resp.strip()
+            or 'SUDO PASSWORD' in model_resp.upper()
+            or model_resp.strip().startswith('Hello')
+            or len(model_resp.strip()) < 100
+        )
+        session_id = interaction_result.get('session_id')
+        if _is_useless and session_id and HermesAgent and isinstance(agent, HermesAgent):
+            summary_prompt = (
+                "请总结你刚才对数据的所有分析结果。列出你发现的所有关键模式、趋势、异常和洞察。"
+                "请用结构化的方式呈现，包含具体数字和百分比。"
+            )
+            work_dir = path_info.get('workspace_dir') or agent.data_root_path
+            summary_result = agent.continue_session(
+                session_id=session_id,
+                query=summary_prompt,
+                work_dir=work_dir,
+            )
+            summary_resp = summary_result.get('model_response', '')
+            if summary_resp and len(summary_resp) > len(model_resp):
+                interaction_result['model_response'] = summary_resp
 
         result = row.copy()
         result.update(interaction_result)
@@ -228,7 +252,7 @@ def run(args):
     agent_class = OpenAIJupyterAgent
     use_hermes = False
     if hasattr(args, 'agent_type'):
-        if args.agent_type == 'hermes_agent':
+        if args.agent_type in ('hermes_agent', 'hermes'):
             agent_class = HermesAgent
             use_hermes = True
         elif args.agent_type == 'skill_jupyter_agent':
