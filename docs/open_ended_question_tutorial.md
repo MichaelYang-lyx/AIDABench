@@ -220,8 +220,42 @@ python evaluation/runner/eval_open_ended.py \
 | `--config_path` | 参考模型配置文件路径 |
 | `--dataset` | 数据集名称 |
 | `--language` | 输出语言（`zh` 或 `en`） |
-| `--max_workers` | 并行 worker 数 |
+| `--max_workers` | 任务级并行 worker 数（同时处理多个 task） |
+| `--ref_max_workers` | 参考模型级并行 worker 数（同时运行多个参考模型） |
 | `--use_cache` | 启用缓存（强烈建议），避免重复调用参考模型 |
+
+### Build Cache（单独生成参考缓存）
+
+在评估多个被测模型前，可以先单独生成 reference cache，避免重复调用参考模型：
+
+```bash
+# 串行（默认）
+python evaluation/runner/eval_open_ended.py build-cache \
+  --task_config data/open_ended_test/test_tasks.json
+
+# 参考模型并行（4 个参考模型并行）
+python evaluation/runner/eval_open_ended.py build-cache \
+  --task_config data/open_ended_test/test_tasks.json \
+  --ref_max_workers 4
+
+# task 级 + 参考模型级双重并行
+python evaluation/runner/eval_open_ended.py build-cache \
+  --task_config data/open_ended_test/test_tasks.json \
+  --max_workers 2 \
+  --ref_max_workers 4
+```
+
+#### 参数说明
+
+| 参数 | 说明 |
+|------|------|
+| `--task_config` | 任务配置文件路径（默认 `data/open_ended_test/test_tasks.json`） |
+| `--config_path` | 参考模型配置文件路径（默认 `configs/reference_models.json`） |
+| `--max_workers` | 任务级并行 worker 数 |
+| `--ref_max_workers` | 参考模型级并行 worker 数 |
+| `--use_cache` | 启用缓存，跳过已完成的任务 |
+
+> **注**：`build-cache` 生成的缓存与 `eval` 命令共享，先跑 `build-cache` 再跑 `eval --use_cache` 可显著节省时间。
 
 #### 缓存机制
 
