@@ -110,23 +110,15 @@ def get_model_cache_dir(cache_path: str, task_id: str, model_name: str) -> str:
 
 def cache_model_response(cache_path: str, task_id: str, model_name: str,
                          response_data: Dict, trace_data: Dict, data_files: List[str]):
-    """Cache a single reference model's response, trace, and data files."""
+    """Cache a single reference model's response and trace."""
     model_dir = get_model_cache_dir(cache_path, task_id, model_name)
     os.makedirs(model_dir, exist_ok=True)
 
     with open(os.path.join(model_dir, "response.json"), 'w', encoding='utf-8') as f:
         json.dump(response_data, f, ensure_ascii=False, indent=2)
 
-    with open(os.path.join(model_dir, "trace.json"), 'w', encoding='utf-8') as f:
+    with open(os.path.join(model_dir, "trace_infer.json"), 'w', encoding='utf-8') as f:
         json.dump(trace_data, f, ensure_ascii=False, indent=2)
-
-    data_dir = os.path.join(model_dir, "data")
-    os.makedirs(data_dir, exist_ok=True)
-    for src_path in data_files:
-        if os.path.exists(src_path):
-            dst_path = os.path.join(data_dir, os.path.basename(src_path))
-            if not os.path.exists(dst_path):
-                shutil.copy2(src_path, dst_path)
 
 
 def load_cached_model_response(cache_path: str, task_id: str, model_name: str) -> Dict:
@@ -201,7 +193,9 @@ def cross_validate_findings(
         return []
 
     for item in os.listdir(task_cache_dir):
-        trace_path = os.path.join(task_cache_dir, item, "trace.json")
+        trace_path = os.path.join(task_cache_dir, item, "trace_infer.json")
+        if not os.path.isfile(trace_path):
+            trace_path = os.path.join(task_cache_dir, item, "trace.json")
         if os.path.isfile(trace_path):
             try:
                 with open(trace_path, 'r', encoding='utf-8') as f:
@@ -220,6 +214,10 @@ def cross_validate_findings(
                             api_key = m["api_key"]
                             provider = m.get("provider")
                             break
+                    # interact() creates profile as: f"{save_name}_{task_id}" where save_name = f"ref_{task_id}_{safe_model_id}"
+                    safe_model_id = model_id.replace('/', '_').replace(' ', '_').replace('.', '-').lower()
+                    fallback_profile = re.sub(r'[^a-z0-9_-]', '-', f"ref_{task_id}_{safe_model_id}_{task_id}".lower())[:64]
+                    hermes_profile = trace.get("hermes_profile") or fallback_profile
                     model_sessions[model_name] = {
                         "session_id": session_id,
                         "workspace": workspace,
@@ -227,7 +225,7 @@ def cross_validate_findings(
                         "api_url": api_url,
                         "api_key": api_key,
                         "provider": provider,
-                        "profile": f"ref_{task_id}_{model_name.replace('/', '_').replace(' ', '_')}"[:64],
+                        "profile": hermes_profile,
                     }
             except Exception:
                 continue
@@ -270,6 +268,7 @@ Output strictly in this JSON format:
 ```"""
 
     validated = []
+    cv_traces = {mname: [] for mname in model_sessions}
 
     for fi, finding in enumerate(non_consensus_findings):
         pattern = finding.get("pattern", "")
@@ -317,6 +316,14 @@ Output strictly in this JSON format:
                 "score": score,
                 "raw_response": resp[:500],
             })
+            cv_traces[mname].append({
+                "finding_index": fi,
+                "pattern": pattern,
+                "prompt": prompt,
+                "response": resp,
+                "score": score,
+                "session_id": minfo["session_id"],
+            })
 
         avg_score = sum(scores) / len(scores) if scores else 0
 
@@ -329,6 +336,22 @@ Output strictly in this JSON format:
         })
 
         print(f"      [{fi+1}/{len(non_consensus_findings)}] \"{pattern[:50]}...\" avg_score={avg_score:.1f}")
+
+    # Save per-model cross-validation traces
+    for mname, traces in cv_traces.items():
+        if not traces:
+            continue
+        model_dir = get_model_cache_dir(cache_path, task_id, mname)
+        if os.path.isdir(model_dir):
+            trace_cv_path = os.path.join(model_dir, "trace_cross_validation.json")
+            with open(trace_cv_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "model_name": mname,
+                    "session_id": model_sessions[mname]["session_id"],
+                    "num_validations": len(traces),
+                    "interactions": traces,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }, f, ensure_ascii=False, indent=2)
 
     # Sort by score descending, take top 10
     validated.sort(key=lambda x: x["avg_score"], reverse=True)
@@ -420,23 +443,16 @@ def run_reference_models(query: str, data_description: str, config: Dict,
             safe_model_name = model['model_id'].replace('/', '_').replace(' ', '_').replace('.', '-').lower()
             profile_name = f"ref_{task_id}_{safe_model_name}"[:64]  # Limit to 64 chars
 
-            # Create a temporary input directory for this model's run
+            # Use cache dir for workspace, point inputs to original data
             model_dir = os.path.join(cache_path, task_id, model_name.replace('/', '_').replace(' ', '_'))
-            model_input_dir = os.path.join(model_dir, "inputs")
-            os.makedirs(model_input_dir, exist_ok=True)
-
-            # Copy data files to the input directory
-            for src_file in data_files:
-                if os.path.exists(src_file):
-                    dst_file = os.path.join(model_input_dir, os.path.basename(src_file))
-                    if not os.path.exists(dst_file):
-                        shutil.copy2(src_file, dst_file)
+            os.makedirs(model_dir, exist_ok=True)
+            data_input_dir = os.path.dirname(data_files[0]) if data_files else model_dir
 
             agent = HermesAgent(
                 api_key=model['api_key'],
                 base_url=model['api_url'],
                 model_name=model['model_id'],
-                data_root_path=model_dir,  # Parent directory, not inputs itself
+                data_root_path=model_dir,
                 save_name=profile_name,
                 max_rounds=model.get('max_rounds', 20),
                 provider=model.get('provider'),
@@ -445,7 +461,7 @@ def run_reference_models(query: str, data_description: str, config: Dict,
             # Prepare path_info for hermes
             path_info = {
                 "task_id": task_id,
-                "real_input_dir": model_input_dir,
+                "real_input_dir": data_input_dir,
                 "real_output_dir": os.path.join(model_dir, "outputs"),
                 "mnt_input_dir": "./inputs",
                 "mnt_output_dir": "./outputs",
@@ -469,7 +485,7 @@ def run_reference_models(query: str, data_description: str, config: Dict,
 
             # Step 2: Extract insights in second round
             # Load the session to get full conversation history
-            session_data = agent._load_session(session_id) if session_id else None
+            session_data = agent._load_session(session_id, hermes_result.get('profile')) if session_id else None
 
             # Prepare second round prompt
             insight_extraction_prompt = (
@@ -511,6 +527,7 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                 "first_round_query": hermes_query,  # Save the actual query sent to hermes
                 "first_round_response": first_round_response,
                 "hermes_session_id": session_id,
+                "hermes_profile": hermes_result.get('profile', ''),
                 "hermes_history": session_data if session_data else [],
                 "second_round_prompt": insight_extraction_prompt,
                 "insights_response": insights_response,
@@ -615,10 +632,11 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
 
             # Step 3: Extract consensus
             print(f"  [Task {i+1}] Extracting consensus findings...")
+            consensus_cfg = config.get('consensus_model', config['judge_model'])
             extractor = ConsensusExtractor(
-                api_key=config['judge_model']['api_key'],
-                base_url=config['judge_model']['api_url'],
-                model_name=config['judge_model']['model_id'],
+                api_key=consensus_cfg['api_key'],
+                base_url=consensus_cfg['api_url'],
+                model_name=consensus_cfg['model_id'],
                 consensus_threshold=config.get('consensus_threshold', 0.6),
                 language=getattr(args, 'language', 'zh'),
             )

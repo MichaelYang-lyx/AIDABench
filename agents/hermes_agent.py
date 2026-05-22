@@ -364,6 +364,11 @@ class HermesAgent:
         ]
 
         model_response = ""
+        env = os.environ.copy()
+        env["ANTHROPIC_API_KEY"] = self._api_key
+        if self._base_url:
+            env["ANTHROPIC_BASE_URL"] = self._base_url
+
         try:
             proc = subprocess.run(
                 cmd,
@@ -371,6 +376,7 @@ class HermesAgent:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
+                env=env,
             )
             model_response = (proc.stdout or "").strip()
 
