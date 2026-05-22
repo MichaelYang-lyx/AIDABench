@@ -172,6 +172,7 @@ def main():
     parser.add_argument("--raccoon_project_uuid", default=json_defaults.get("raccoon_project_uuid", ""), help="Raccoon project UUID (xhx_pipeline only)")
     parser.add_argument("--enable_web_search", action="store_true", default=json_defaults.get("enable_web_search", False), help="Enable web search in Raccoon (xhx_pipeline only)")
     parser.add_argument("--deep_think", action="store_true", default=json_defaults.get("deep_think", False), help="Enable deep think mode in Raccoon (xhx_pipeline only)")
+    parser.add_argument("--provider", default=json_defaults.get("provider"), help="Model provider for hermes (e.g., anthropic, openai, google, custom)")
 
     # Capture all arguments
     args = parser.parse_args()
@@ -244,6 +245,18 @@ def main():
                 run_file_generation_task(current_args)
             except ImportError as e:
                 print(f"Error importing infer.runner.run_file_generation: {e}")
+                sys.exit(1)
+            except Exception as e:
+                print(f"Error executing task: {e}")
+                sys.exit(1)
+
+        elif "open_ended" in ds_lower or "open" in ds_lower:
+            try:
+                from infer.runner.run_open_ended import run as run_open_ended_task
+                print(f"Dispatching to infer.runner.run_open_ended for dataset '{ds_name}'...")
+                run_open_ended_task(current_args)
+            except ImportError as e:
+                print(f"Error importing infer.runner.run_open_ended: {e}")
                 sys.exit(1)
             except Exception as e:
                 print(f"Error executing task: {e}")

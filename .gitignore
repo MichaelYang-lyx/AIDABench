@@ -1,6 +1,7 @@
 .env
 test/
 .venv/
+docs_2/
 some_functions/
 data_old/
 uv.lock
@@ -10,6 +11,8 @@ test.py
 __pycache__/
 *.pyc
 output/
+data/
+raw_data/
 run_claude.sh
 run_ds.sh
 run_gemini.sh
@@ -17,4 +20,5 @@ run_qwen30.sh
 run_qwenmax.sh
 yantao_output
 Edit-Banana
-configs/
+configs/reference_models.json
+workspaces/
