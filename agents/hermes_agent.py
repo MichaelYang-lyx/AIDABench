@@ -302,6 +302,10 @@ class HermesAgent:
             m = re.search(r"session_id:\s*(\S+)", stderr)
             if m:
                 session_id = m.group(1)
+            if not session_id:
+                m = re.search(r"session_id:\s*(\S+)", stdout)
+                if m:
+                    session_id = m.group(1)
 
             if session_id:
                 session_data = self._load_session(session_id, task_profile)

@@ -4,11 +4,9 @@ import json
 import re
 import csv
 import time
-import shutil
 import concurrent.futures
 from tqdm import tqdm
 from typing import Dict, List, Any, Tuple
-from openai import OpenAI
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -131,9 +129,9 @@ def load_cached_model_response(cache_path: str, task_id: str, model_name: str) -
     return None
 
 
-def cache_consensus_and_rubric(cache_path: str, task_id: str,
-                               consensus_findings: List, non_consensus_findings: List, rubric: Dict):
-    """Cache consensus findings and rubric at task level."""
+def cache_consensus_findings(cache_path: str, task_id: str,
+                             consensus_findings: List, non_consensus_findings: List):
+    """Cache consensus findings only (before rubric generation)."""
     task_dir = get_task_cache_dir(cache_path, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
@@ -143,8 +141,21 @@ def cache_consensus_and_rubric(cache_path: str, task_id: str,
             "non_consensus_findings": non_consensus_findings
         }, f, ensure_ascii=False, indent=2)
 
+
+def cache_rubric(cache_path: str, task_id: str, rubric: Dict):
+    """Cache rubric only (after rubric generation)."""
+    task_dir = get_task_cache_dir(cache_path, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+
     with open(os.path.join(task_dir, "rubric.json"), 'w', encoding='utf-8') as f:
         json.dump(rubric, f, ensure_ascii=False, indent=2)
+
+
+def cache_consensus_and_rubric(cache_path: str, task_id: str,
+                               consensus_findings: List, non_consensus_findings: List, rubric: Dict):
+    """Cache consensus findings and rubric at task level."""
+    cache_consensus_findings(cache_path, task_id, consensus_findings, non_consensus_findings)
+    cache_rubric(cache_path, task_id, rubric)
 
 
 def load_cached_consensus_and_rubric(cache_path: str, task_id: str) -> Tuple:
@@ -177,8 +188,8 @@ def cross_validate_findings(
     """Cross-validate non-consensus findings by resuming other models' Hermes sessions.
 
     For each finding (proposed by model A), resume models B and C's sessions
-    and ask them to score (0-10) whether the finding is factually correct and valuable.
-    Returns top 10 findings sorted by average validation score.
+    and ask them to score (0-5) whether the finding is factually correct and valuable.
+    Returns findings with average score >= 3, sorted by score descending.
     """
     from agents.hermes_agent import HermesAgent
 
@@ -246,7 +257,13 @@ def cross_validate_findings(
 ## 证据：
 {evidence}
 
-请打分（0-10分，10分表示完全正确且非常有价值）并简要说明理由。
+请按以下标准打分（0-5分）并简要说明理由：
+- 5分：发现完全正确，数值准确，且揭示了非显而易见的重要洞察
+- 4分：发现正确，数值基本准确，具有一定分析价值
+- 3分：发现大致正确，但数值有小幅偏差或结论较为常规
+- 2分：发现部分正确，但存在明显的数值错误或逻辑漏洞
+- 1分：发现大部分不正确，或证据严重不足
+- 0分：发现完全错误，或与数据无关
 请严格按以下 JSON 格式输出（不要输出其他内容）：
 ```json
 {{"score": X, "reason": "..."}}
@@ -261,7 +278,13 @@ You may write code to verify the numerical claims.
 ## Evidence:
 {evidence}
 
-Score this finding (0-10, where 10 means completely correct and highly valuable) and briefly explain.
+Score this finding using the following rubric and briefly explain:
+- 5: Completely correct, numerically accurate, reveals a non-obvious and important insight
+- 4: Correct, numerically sound, provides meaningful analytical value
+- 3: Mostly correct, minor numerical deviations or somewhat routine conclusion
+- 2: Partially correct, but has notable numerical errors or logical gaps
+- 1: Mostly incorrect, or severely lacking in supporting evidence
+- 0: Entirely wrong, or unrelated to the data
 Output strictly in this JSON format:
 ```json
 {{"score": X, "reason": "..."}}
@@ -323,6 +346,7 @@ Output strictly in this JSON format:
                 "response": resp,
                 "score": score,
                 "session_id": minfo["session_id"],
+                "history": result.get("history", []),
             })
 
         avg_score = sum(scores) / len(scores) if scores else 0
@@ -353,16 +377,16 @@ Output strictly in this JSON format:
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }, f, ensure_ascii=False, indent=2)
 
-    # Sort by score descending, take top 10
+    # Filter findings with avg_score >= 3, sort by score descending
     validated.sort(key=lambda x: x["avg_score"], reverse=True)
-    top_n = validated[:10]
+    qualified = [v for v in validated if v["avg_score"] >= 3.0]
 
-    print(f"    Cross-validation complete: {len(validated)} findings evaluated, top {len(top_n)} selected")
-    return top_n
+    print(f"    Cross-validation complete: {len(validated)} findings evaluated, {len(qualified)} qualified (avg_score >= 3)")
+    return qualified
 
 
 def _parse_validation_score(response: str) -> float:
-    """Parse a 0-10 score from the validation response."""
+    """Parse a 0-5 score from the validation response."""
     import re as _re
     # Try JSON parse
     try:
@@ -380,9 +404,9 @@ def _parse_validation_score(response: str) -> float:
     except (ValueError, AttributeError):
         pass
 
-    # Fallback: look for "X/10" or "score: X"
+    # Fallback: look for "X/5" or "score: X"
     try:
-        match = _re.search(r'(\d+(?:\.\d+)?)\s*/\s*10', response)
+        match = _re.search(r'(\d+(?:\.\d+)?)\s*/\s*5', response)
         if match:
             return float(match.group(1))
         match = _re.search(r'[Ss]core\s*[:=：]\s*(\d+(?:\.\d+)?)', response)
@@ -417,33 +441,30 @@ def load_cached_cross_validation(cache_path: str, task_id: str) -> List[Dict]:
 # =============================================================================
 
 def run_reference_models(query: str, data_description: str, config: Dict,
-                         cache_path: str, task_id: str, data_files: List[str]) -> List[Dict]:
-    """Run reference models with hermes agent, then extract insights in second round."""
-    results = []
+                         cache_path: str, task_id: str, data_files: List[str],
+                         language: str = "zh", max_workers: int = 1) -> List[Dict]:
+    """Run reference models with hermes agent, then extract insights in second round.
 
-    for model in config['models']:
+    Args:
+        max_workers: Number of parallel workers for running reference models (default: 1 for serial)
+    """
+    from agents.hermes_agent import HermesAgent
+
+    def _run_single_model(model: Dict) -> Dict:
         model_name = model['name']
 
         # Check cache first
         cached = load_cached_model_response(cache_path, task_id, model_name)
         if cached is not None:
             print(f"    [Cache HIT] {model_name}")
-            results.append(cached)
-            continue
+            return cached
 
         print(f"    [Cache MISS] Running {model_name} with hermes...")
         t_start = time.time()
         try:
-            # Step 1: Run hermes agent for this model
-            from agents.hermes_agent import HermesAgent
-            import shutil
-
-            # Create a unique profile name for this reference model
-            # Hermes profile names must match [a-z0-9][a-z0-9_-]{0,63}
             safe_model_name = model['model_id'].replace('/', '_').replace(' ', '_').replace('.', '-').lower()
-            profile_name = f"ref_{task_id}_{safe_model_name}"[:64]  # Limit to 64 chars
+            profile_name = f"ref_{task_id}_{safe_model_name}"[:64]
 
-            # Use cache dir for workspace, point inputs to original data
             model_dir = os.path.join(cache_path, task_id, model_name.replace('/', '_').replace(' ', '_'))
             os.makedirs(model_dir, exist_ok=True)
             data_input_dir = os.path.dirname(data_files[0]) if data_files else model_dir
@@ -458,7 +479,6 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                 provider=model.get('provider'),
             )
 
-            # Prepare path_info for hermes
             path_info = {
                 "task_id": task_id,
                 "real_input_dir": data_input_dir,
@@ -468,7 +488,6 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                 "workspace_dir": os.path.join(model_dir, "workspace")
             }
 
-            # Run hermes with the original query, mentioning the data files
             file_names = [os.path.basename(f) for f in data_files]
             files_str = ", ".join(file_names) if file_names else "the provided data"
             hermes_query = f"{query}\n\nThe data file(s) are located at: ./inputs/{files_str}"
@@ -483,65 +502,82 @@ def run_reference_models(query: str, data_description: str, config: Dict,
             first_round_response = hermes_result.get('model_response', '')
             session_id = hermes_result.get('session_id', '')
 
-            # Step 2: Extract insights in second round
-            # Load the session to get full conversation history
-            session_data = agent._load_session(session_id, hermes_result.get('profile')) if session_id else None
+            if language == "zh":
+                insight_extraction_prompt = (
+                    "请基于你上面的分析，总结所有关键发现、规律、趋势和洞察。"
+                    "请以要点形式清晰简洁地列出。"
+                    "重点关注可操作的洞察和数据中的重要规律。"
+                    "同时请列出你生成的关键交付产物（如图表、报告等），并简要说明其内容。\n\n"
+                    "总条数最多为15条。"
+                    "输出格式示例：\n"
+                    "1. 关键发现1：[具体发现内容]\n"
+                    "2. 关键发现2：[规律描述]\n"
+                    "3. 规律1：[洞察内容]\n"
+                    "...\n"
+                    "15. 交付产物3：[产物名称] - [简要说明]"
+                )
+            else:
+                insight_extraction_prompt = (
+                    "Based on your analysis above, please summarize all key findings, patterns, trends, "
+                    "and insights you discovered. List them clearly and concisely as bullet points. "
+                    "Focus on actionable insights and important patterns in the data. "
+                    "Also list the key deliverables you produced (e.g. charts, reports) with a brief description.\n\n"
+                    "Output format example:\n"
+                    "1. Key Finding: [specific finding]\n"
+                    "2. Important Pattern: [pattern description]\n"
+                    "3. Actionable Insight: [insight content]\n"
+                    "4. Deliverable: [name] - [brief description]"
+                )
 
-            # Prepare second round prompt
-            insight_extraction_prompt = (
-                "Based on your analysis above, please summarize all key findings, patterns, trends, "
-                "and insights you discovered. List them clearly and concisely as bullet points. "
-                "Focus on actionable insights and important patterns in the data."
-            )
+            if not session_id:
+                print(f"    Warning: No session_id captured for {model_name}, falling back to combined query")
+                combined_query = hermes_query + "\n\n" + insight_extraction_prompt
+                fallback_result = agent.interact(
+                    query=combined_query,
+                    system_prompt="You are an expert data analyst. Analyze the dataset thoroughly.",
+                    run_code_func=None,
+                    path_info=path_info
+                )
+                t_end = time.time()
+                insights_response = fallback_result.get('model_response', '')
+                insight_result = {'history': fallback_result.get('history', [])}
+            else:
+                work_dir = os.path.join(model_dir, "workspace")
+                insight_result = agent.continue_session(
+                    session_id=session_id,
+                    query=insight_extraction_prompt,
+                    work_dir=work_dir,
+                    profile=hermes_result.get('profile'),
+                )
 
-            # Call the model again for insight extraction
-            client = OpenAI(api_key=model['api_key'], base_url=model['api_url'])
-
-            # Build conversation history for second round
-            messages = [
-                {"role": "system", "content": "You are an expert data analyst."},
-                {"role": "user", "content": query},
-                {"role": "assistant", "content": first_round_response},
-                {"role": "user", "content": insight_extraction_prompt}
-            ]
-
-            response = client.chat.completions.create(
-                model=model['model_id'],
-                messages=messages,
-                temperature=0.3,
-                max_tokens=2048
-            )
-
-            t_end = time.time()
-            insights_response = response.choices[0].message.content
+                t_end = time.time()
+                insights_response = insight_result.get('model_response', '')
+                if insights_response.startswith('↻'):
+                    insights_response = '\n'.join(insights_response.split('\n')[1:]).strip()
 
             resp_data = {
                 "model_name": model_name,
-                "model_response": insights_response  # This is what consensus extraction will use
+                "model_response": insights_response
             }
 
             trace_data = {
                 "model_name": model_name,
                 "model_id": model['model_id'],
                 "api_url": model['api_url'],
-                "first_round_query": hermes_query,  # Save the actual query sent to hermes
+                "first_round_query": hermes_query,
                 "first_round_response": first_round_response,
+                "first_round_history": hermes_result.get('history', []),
                 "hermes_session_id": session_id,
                 "hermes_profile": hermes_result.get('profile', ''),
-                "hermes_history": session_data if session_data else [],
                 "second_round_prompt": insight_extraction_prompt,
                 "insights_response": insights_response,
-                "usage": {
-                    "prompt_tokens": getattr(response.usage, 'prompt_tokens', None),
-                    "completion_tokens": getattr(response.usage, 'completion_tokens', None),
-                    "total_tokens": getattr(response.usage, 'total_tokens', None),
-                },
+                "second_round_history": insight_result.get('history', []),
                 "elapsed_seconds": round(t_end - t_start, 2),
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
             }
 
             cache_model_response(cache_path, task_id, model_name, resp_data, trace_data, data_files)
-            results.append(resp_data)
+            return resp_data
 
         except Exception as e:
             t_end = time.time()
@@ -557,9 +593,144 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
             }
             cache_model_response(cache_path, task_id, model_name, resp_data, trace_data, data_files)
-            results.append(resp_data)
+            return resp_data
 
+    models = config['models']
+    if max_workers <= 1 or len(models) <= 1:
+        return [_run_single_model(m) for m in models]
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_run_single_model, m): m['name'] for m in models}
+        for future in concurrent.futures.as_completed(futures):
+            model_name = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as e:
+                print(f"    Warning: Reference model {model_name} unexpected error: {e}")
+                results.append({"model_name": model_name, "model_response": "", "error": str(e)})
     return results
+
+
+# =============================================================================
+# Build reference cache command
+# =============================================================================
+
+def build_reference_cache(args):
+    """Build reference cache (consensus + rubric) for all tasks."""
+    config = load_reference_models_config(args.config_path)
+    ground_truth_map = load_ground_truth_insights(args.task_config)
+
+    dataset_name = getattr(args, 'dataset', 'open_ended_test')
+    cache_path = getattr(args, 'cache_path', None)
+    if not cache_path:
+        cache_path = os.path.join(PROJECT_ROOT, "output", "reference_cache", dataset_name)
+
+    os.makedirs(cache_path, exist_ok=True)
+    print(f"Building reference cache at: {cache_path}")
+    print(f"Tasks to process: {len(ground_truth_map)}")
+
+    max_workers = getattr(args, 'max_workers', 1)
+
+    def process_single_cache_task(task_id, task_info, idx, total):
+        print(f"\n[{idx+1}/{total}] Processing task: {task_id}")
+
+        # Check if already cached
+        _, _, rubric = load_cached_consensus_and_rubric(cache_path, task_id)
+        if rubric is not None:
+            print(f"  Task {task_id} already has cached rubric, skipping.")
+            return
+
+        query = task_info.get('query', '')
+
+        # Step 1: Get data description
+        print(f"  [{task_id}] Getting data description...")
+        data_description = get_data_description(task_id, ground_truth_map)
+
+        # Resolve data files
+        csv_path = task_info.get('dataset_csv_path', '')
+        data_files = []
+        if csv_path:
+            full_path = os.path.join(PROJECT_ROOT, csv_path) if not os.path.isabs(csv_path) else csv_path
+            if os.path.exists(full_path):
+                parent_dir = os.path.dirname(full_path)
+                data_files = [
+                    os.path.join(parent_dir, f) for f in sorted(os.listdir(parent_dir))
+                    if os.path.isfile(os.path.join(parent_dir, f))
+                ]
+
+        # Step 2: Run reference models
+        print(f"  [{task_id}] Running {len(config['models'])} reference models...")
+        reference_responses = run_reference_models(
+            query, data_description, config, cache_path, task_id, data_files,
+            language=getattr(args, 'language', 'zh'),
+            max_workers=getattr(args, 'ref_max_workers', 1)
+        )
+        valid_responses = [r for r in reference_responses if r.get('model_response')]
+        print(f"  [{task_id}] Got {len(valid_responses)}/{len(reference_responses)} valid responses")
+
+        # Step 3: Extract consensus
+        print(f"  [{task_id}] Extracting consensus findings...")
+        consensus_cfg = config.get('consensus_model', config['judge_model'])
+        extractor = ConsensusExtractor(
+            api_key=consensus_cfg['api_key'],
+            base_url=consensus_cfg['api_url'],
+            model_name=consensus_cfg['model_id'],
+            consensus_threshold=config.get('consensus_threshold', 0.6),
+            language=getattr(args, 'language', 'zh'),
+        )
+        consensus_findings, non_consensus_findings = extractor.extract(valid_responses)
+        print(f"  [{task_id}] Found {len(consensus_findings)} consensus, {len(non_consensus_findings)} non-consensus findings")
+
+        # Save consensus findings
+        cache_consensus_findings(cache_path, task_id, consensus_findings, non_consensus_findings)
+
+        # Step 4: Cross-validate non-consensus findings
+        print(f"  [{task_id}] Cross-validating non-consensus findings...")
+        validated_l3 = cross_validate_findings(
+            non_consensus_findings=non_consensus_findings,
+            reference_responses=valid_responses,
+            consensus_cfg=consensus_cfg,
+            language=getattr(args, 'language', 'zh')
+        )
+        print(f"  [{task_id}] Cross-validation: {len(validated_l3)} findings passed")
+        cache_cross_validation(cache_path, task_id, validated_l3)
+
+        # Step 5: Generate rubric
+        print(f"  [{task_id}] Generating rubric...")
+        all_findings = consensus_findings + validated_l3
+        rubric_cfg = config.get('rubric_model', config['judge_model'])
+        generator = RubricGenerator(
+            api_key=rubric_cfg['api_key'],
+            base_url=rubric_cfg['api_url'],
+            model_name=rubric_cfg['model_id'],
+            language=getattr(args, 'language', 'zh'),
+        )
+        rubric = generator.generate(query, all_findings)
+        print(f"  [{task_id}] Generated rubric with {len(rubric)} criteria")
+        cache_rubric(cache_path, task_id, rubric)
+
+        print(f"  ✓ Task {task_id} cache complete")
+
+    # Execute tasks
+    task_items = list(ground_truth_map.items())
+    if max_workers == 1:
+        for idx, (task_id, task_info) in enumerate(task_items):
+            process_single_cache_task(task_id, task_info, idx, len(task_items))
+    else:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(process_single_cache_task, task_id, task_info, idx, len(task_items))
+                for idx, (task_id, task_info) in enumerate(task_items)
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"  Error processing task: {e}")
+
+    print(f"\n✓ Reference cache build complete: {cache_path}")
 
 
 # =============================================================================
@@ -625,7 +796,9 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
             # Step 2: Run reference models (with per-model cache)
             print(f"  [Task {i+1}] Running {len(config['models'])} reference models...")
             reference_responses = run_reference_models(
-                query, data_description, config, cache_path, task_id, data_files
+                query, data_description, config, cache_path, task_id, data_files,
+                language=getattr(args, 'language', 'zh'),
+                max_workers=getattr(args, 'ref_max_workers', 1)
             )
             valid_responses = [r for r in reference_responses if r.get('model_response')]
             print(f"  [Task {i+1}] Got {len(valid_responses)}/{len(reference_responses)} valid responses")
@@ -642,6 +815,10 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
             )
             consensus_findings, non_consensus_findings = extractor.extract(valid_responses)
             print(f"  [Task {i+1}] Found {len(consensus_findings)} consensus, {len(non_consensus_findings)} non-consensus findings")
+
+            # Save consensus findings immediately (before cross-validation and rubric generation)
+            if use_cache:
+                cache_consensus_findings(cache_path, task_id, consensus_findings, non_consensus_findings)
 
             # Step 3.5: Cross-validate non-consensus findings (L3)
             print(f"  [Task {i+1}] Cross-validating non-consensus findings...")
@@ -677,8 +854,9 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
                 validated_l3_findings=validated_l3 if validated_l3 else None,
             )
 
-            # Save to cache (overwrite)
-            cache_consensus_and_rubric(cache_path, task_id, consensus_findings, non_consensus_findings, rubric)
+            # Save rubric to cache (consensus_findings already saved after Step 3)
+            if use_cache:
+                cache_rubric(cache_path, task_id, rubric)
 
         print(f"  [Task {i+1}] Rubric: L1={len(rubric.get('layer1_must_find',[]))} items, "
               f"L2={len(rubric.get('layer2_process_quality',[]))} items, "
@@ -731,6 +909,21 @@ def process_single_task(row: Dict, i: int, args, config: Dict, ground_truth_map:
             model_output_workspace=model_workspace_path,
             judge_workspace_dir=judge_workspace_dir,
         )
+
+        # Save judge trace
+        judge_traces = eval_result.pop('judge_traces', [])
+        if judge_traces:
+            trace_judge_path = os.path.join(judge_workspace_dir, "trace_judge.json")
+            os.makedirs(judge_workspace_dir, exist_ok=True)
+            with open(trace_judge_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "task_id": task_id,
+                    "judge_model": config['judge_model']['model_id'],
+                    "num_runs": len(judge_traces),
+                    "runs": judge_traces,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }, f, ensure_ascii=False, indent=2)
+            print(f"  [Task {i+1}] Judge trace saved to: {trace_judge_path}")
 
         row['score'] = eval_result.get('mean_score', 0)
         row['reason'] = eval_result.get('detailed_feedback', '')
@@ -849,14 +1042,28 @@ def run(args):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Run open-ended evaluation")
-    parser.add_argument("--input_path", required=True, help="Path to model predictions")
-    parser.add_argument("--output_path", required=True, help="Path to save evaluation results")
+
+    # Common arguments
+    parser.add_argument("--input_path", default=None, help="Path to model predictions")
+    parser.add_argument("--output_path", default=None, help="Path to save evaluation results")
     parser.add_argument("--config_path", default="configs/reference_models.json", help="Path to reference models config")
     parser.add_argument("--max_workers", type=int, default=1, help="Number of parallel workers")
     parser.add_argument("--use_cache", action="store_true", help="Reuse cached consensus findings and rubrics")
     parser.add_argument("--cache_path", default=None, help="Path for consensus/rubric cache (default: output/reference_cache/{dataset})")
     parser.add_argument("--dataset", default="open_ended_test", help="Dataset name for cache directory")
     parser.add_argument("--language", default="zh", choices=["zh", "en"], help="Language for rubric generation (zh or en)")
+    parser.add_argument("--ref_max_workers", type=int, default=1, help="Number of parallel workers for reference models")
+    parser.add_argument("--task_config", default="data/open_ended_test/test_tasks.json", help="Path to task config JSON")
+
+    parser.add_argument("command", nargs="?", default="eval", choices=["eval", "build-cache"],
+                        help="Command to run (default: eval)")
+
     args = parser.parse_args()
-    args.use_hermes_judge = True
-    run(args)
+
+    if args.command == 'eval':
+        if not args.input_path or not args.output_path:
+            parser.error("--input_path and --output_path are required for eval")
+        args.use_hermes_judge = True
+        run(args)
+    elif args.command == 'build-cache':
+        build_reference_cache(args)

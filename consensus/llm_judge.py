@@ -55,6 +55,7 @@ class LLMJudge:
         scores = []
         layer_scores_list = []
         feedbacks = []
+        judge_traces = []
 
         for run_idx in range(num_runs):
             if self.use_hermes:
@@ -68,6 +69,10 @@ class LLMJudge:
                 result = self._single_evaluation(
                     analysis_output, rubric, task_description, run_idx
                 )
+            trace = result.pop("_hermes_trace", None)
+            if trace:
+                trace["run_idx"] = run_idx
+                judge_traces.append(trace)
             scores.append(result["total_score"])
             layer_scores_list.append(result["layer_scores"])
             feedbacks.append(result["feedback"])
@@ -91,6 +96,7 @@ class LLMJudge:
             "layer_scores": avg_layer_scores,
             "detailed_feedback": feedbacks[0],
             "all_feedbacks": feedbacks,
+            "judge_traces": judge_traces,
         }
 
     def _hermes_evaluation(
@@ -212,6 +218,18 @@ class LLMJudge:
         # Parse the result
         content = hermes_result.get("model_response", "")
         result = self._parse_judge_result(content, run_idx)
+
+        # Attach hermes trace to result for caller to save
+        result["_hermes_trace"] = {
+            "session_id": hermes_result.get("session_id"),
+            "profile": hermes_result.get("profile"),
+            "history": hermes_result.get("history", []),
+            "total_tokens": hermes_result.get("total_tokens", 0),
+            "rounds": hermes_result.get("rounds", 0),
+            "duration_seconds": hermes_result.get("duration_seconds", 0),
+            "tool_calls": hermes_result.get("tool_calls", {}),
+            "model_response": content,
+        }
 
         return result
 

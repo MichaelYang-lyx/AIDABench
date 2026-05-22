@@ -32,7 +32,7 @@ AIDABench 的 Open-Ended Question 评估采用 **ConsensusEval** 框架，核心
 ### 评估流程详解
 
 1. **Reference Model Infer** — 多个参考模型（如 gemini、claude、deepseek）各自通过 Hermes Agent 分析数据，产出独立的 findings
-2. **Consensus Extraction** — 语义对齐多个模型的输出，提取 ≥60% 模型都发现的共识（L1）和非共识发现
+2. **Consensus Extraction** — 语义对齐多个模型的输出，按设定阈值（如 60%）划分共识发现（L1）和非共识发现
 3. **Cross-Validation** — 恢复参考模型的 Hermes session，让其他模型验证非共识发现的正确性（L3）
 4. **Rubric Generation** — 基于共识和验证结果生成三层评分标准：
    - L1 (Must-Find): 共识发现，必须覆盖
@@ -308,3 +308,55 @@ rm -rf output/reference_cache/open_ended_test/open_ended_001/
 ### 如何只重跑 Judge 阶段
 
 保留 reference cache 中的 `consensus.json`、`rubric.json`、`cross_validation.json`，删除 `output/eval/` 下的评估结果文件即可。
+
+---
+
+## 输出结构
+
+### reference_cache 目录
+
+参考模型运行结果缓存在 `output/reference_cache/{dataset}/{task_id}/`：
+
+```
+output/reference_cache/open_ended_test/
+└── open_ended_001/
+    ├── gemini-3.1-pro-preview/
+    │   ├── response.json               # 模型最终分析结果（用于共识提取）
+    │   ├── trace_infer.json            # 推理阶段完整记录（两轮对话历史）
+    │   ├── trace_cross_validation.json # Cross-validation 阶段对话历史
+    │   └── workspace/                  # Hermes 工作空间（代码、图表等产出）
+    ├── claude-opus-4-6/
+    │   └── ...（同上）
+    ├── deepseek-v4-pro/
+    │   └── ...（同上）
+    ├── consensus.json                  # 共识提取结果（含 consensus/non-consensus findings）
+    ├── rubric.json                     # 三层评分标准
+    └── cross_validation.json           # Cross-validation 汇总结果
+```
+
+### eval 输出目录
+
+评估结果保存在 `output/eval/{model_name}/{dataset}/`：
+
+```
+output/eval/claude-opus-4-6/open_ended_test/
+├── open_ended_001.json    # 单任务评估结果（含三层评分明细）
+├── open_ended_002.json
+└── summary.json           # 所有任务汇总得分
+```
+
+`summary.json` 格式：
+
+```json
+{
+  "model": "claude-opus-4-6",
+  "dataset": "open_ended_test",
+  "scores": {
+    "open_ended_001": 90,
+    "open_ended_002": 72
+  },
+  "average_score": 81.0
+}
+```
+
+> **注**：得分范围 0–100，由三层评分标准加权计算：L1（Must-Find）×0.5 + L2（Process Quality）×0.3 + L3（Bonus）×0.2

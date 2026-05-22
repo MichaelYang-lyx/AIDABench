@@ -6,6 +6,7 @@ Uses semantic alignment to identify what ≥60% of models discovered.
 
 import json
 import re
+import time
 from typing import List, Dict, Any, Tuple
 from openai import OpenAI
 
@@ -29,7 +30,9 @@ class ConsensusExtractor:
             consensus_threshold: Minimum fraction of models that must mention a finding (default: 0.6)
             language: Output language for findings (default: "zh")
         """
-        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=600, max_retries=3)
+        self.api_key=api_key
+        self.base_url=base_url
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=3600, max_retries=3)
         self.model_name = model_name
         self.consensus_threshold = consensus_threshold
         self.language = language
@@ -52,6 +55,8 @@ class ConsensusExtractor:
         """
         # Build prompt for semantic alignment
         n_models = len(analysis_results)
+        if n_models == 0:
+            return [], []
         analyses_text = self._format_analyses(analysis_results)
 
         prompt_en = f"""You are analyzing {n_models} independent data analysis results from different AI models.
@@ -90,7 +95,7 @@ Be precise. Only group findings that are semantically equivalent. Include ALL fi
 {analyses_text}
 
 # 要求：
-1. 识别所有分析中提到的所有不同模式/发现
+1. 识别所有分析中提到的所有不同模式/发现/产物要求
 2. 对于每个模式，判断哪些模型提到了它（使用语义相似性，而非精确措辞匹配）
 3. 计算频率（提到该发现的模型占比）
 4. 从每个模型的分析中提取支持证据
@@ -119,19 +124,34 @@ Be precise. Only group findings that are semantically equivalent. Include ALL fi
             else "You are an expert at analyzing and comparing data analysis results."
         )
 
-        # Call LLM for extraction
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.0,
-        )
+        # Call LLM for extraction with retry for transient errors
+        print(f"  [Consensus] Calling {self.model_name} to extract findings from {n_models} model analyses...")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=65536,
+                    temperature=0.0,
+                )
+                content = response.choices[0].message.content
+                print(f"  [Consensus] LLM response received ({len(content)} chars)")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1 and any(code in str(e) for code in ['502', '504', '500', 'timeout', 'Timeout']):
+                    wait = 30 * (attempt + 1)
+                    print(f"    Retrying consensus extraction (attempt {attempt + 2}/{max_retries}) after {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
 
         # Parse response
+        print(f"  [Consensus] Parsing findings JSON...")
         try:
-            content = response.choices[0].message.content
             try:
                 result = json.loads(content)
             except json.JSONDecodeError:
@@ -153,6 +173,7 @@ Be precise. Only group findings that are semantically equivalent. Include ALL fi
             f for f in all_findings if f["frequency"] < self.consensus_threshold
         ]
 
+        print(f"  [Consensus] Total findings: {len(all_findings)} | Consensus (>={self.consensus_threshold}): {len(consensus_findings)} | Non-consensus: {len(non_consensus_findings)}")
         return consensus_findings, non_consensus_findings
 
     def _format_analyses(self, analysis_results: List[Dict[str, Any]]) -> str:

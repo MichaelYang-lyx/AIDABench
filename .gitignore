@@ -1,6 +1,7 @@
 .env
 test/
 .venv/
+docs_2/
 some_functions/
 data_old/
 uv.lock
