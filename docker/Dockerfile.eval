@@ -1,0 +1,37 @@
+ARG BASE=hermes-agent:latest
+FROM ${BASE}
+
+USER root
+
+# Preinstall common data-analysis / ML / web-parsing packages into the
+# hermes venv. The agent's execute_code sandbox and terminal `python3`
+# both resolve to /opt/hermes/.venv/bin/python3, so installing here makes
+# the packages visible to tools without needing pip at runtime.
+RUN VIRTUAL_ENV=/opt/hermes/.venv uv pip install --no-cache \
+    pandas openpyxl xlrd matplotlib scipy \
+    beautifulsoup4 lxml \
+    scikit-learn pyarrow tqdm \
+    python-pptx markitdown yfinance
+
+# /etc/profile unconditionally resets PATH, which strips /opt/hermes/.venv/bin
+# when hermes' terminal tool spawns `bash -l` (login shell) to snapshot the
+# environment. Without the venv on PATH the captured snapshot points at the
+# system python (no pandas/openpyxl/etc), so every subsequent terminal command
+# from the agent fails to import preinstalled packages. Re-prepend the venv
+# from a profile.d drop-in so login shells see the same PATH as hermes itself.
+RUN printf 'export PATH=/opt/hermes/.venv/bin:$PATH\n' > /etc/profile.d/hermes-venv.sh
+
+COPY oneshot.py /opt/hermes-eval/oneshot.py
+RUN chmod +x /opt/hermes-eval/oneshot.py
+
+# Disable the upstream entrypoint's privilege drop (`exec gosu hermes`)
+# so the agent runs as root. Tasks can then apt-get / uv pip install
+# runtime deps without permission errors. oneshot.py chowns the bind
+# mounts back to HERMES_UID/HERMES_GID on exit so host files stay owned
+# by the invoking user.
+RUN sed -i 's|exec gosu hermes "$0" "$@"|: # priv-drop disabled for hermes-eval|' \
+    /opt/hermes/docker/entrypoint.sh
+
+ENV TERMINAL_ENV=local
+ENV HERMES_HOME=/opt/data
+ENV PYTHONUNBUFFERED=1
