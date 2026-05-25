@@ -51,7 +51,7 @@ cd /data/projects/AIDABench
 source .venv/bin/activate
 ```
 
-确保已安装 `hermes` CLI 并可在 PATH 中访问。
+确保已安装 `hermes` CLI 并可在 PATH 中访问（本地模式），或已安装 Docker 并构建好镜像（容器化模式，见下文）。
 
 ### 2. 配置文件：`configs/reference_models.json`
 
@@ -156,7 +156,14 @@ source .venv/bin/activate
 
 ### Stage 1: Infer（被评估模型推理）
 
-让被评估模型分析数据集中的每个任务：
+让被评估模型分析数据集中的每个任务。Infer 阶段支持两种运行方式：
+
+| 方式 | Agent Type | 说明 |
+|------|-----------|------|
+| **A. 本地 Hermes CLI** | `hermes` | 需要在宿主机安装 hermes CLI |
+| **B. Docker 容器化（推荐）** | `hermes_docker` | 每个任务在独立 Docker 容器中运行，环境隔离 |
+
+#### 方式 A: 本地 Hermes CLI
 
 ```bash
 cd /data/projects/AIDABench
@@ -172,6 +179,81 @@ python infer/run.py \
     --provider anthropic
 ```
 
+#### 方式 B: Docker 容器化（推荐）
+
+每个任务在独立的 Docker 容器中运行，具有以下优点：
+- **环境隔离**：任务之间互不影响，避免文件系统污染
+- **可复现**：固定的容器镜像保证一致的运行环境
+- **无需安装 Hermes CLI**：所有依赖打包在镜像中
+
+**第一步：构建 Docker 镜像**
+
+```bash
+cd /data/projects/AIDABench
+bash docker/build.sh
+```
+
+该脚本会：
+1. 检查 `hermes-agent:latest` 基础镜像是否存在，若不存在则从 GitHub 克隆并构建
+2. 在基础镜像之上构建 `hermes-eval:latest` 评测镜像（包含 `oneshot.py` 入口脚本）
+
+可通过环境变量自定义构建行为：
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `HERMES_IMAGE` | `hermes-agent:latest` | 基础镜像名称 |
+| `EVAL_IMAGE` | `hermes-eval:latest` | 评测镜像名称 |
+| `HERMES_REPO` | `https://github.com/xxx/hermes-agent.git` | Hermes 代码仓库地址 |
+| `HERMES_REF` | `v2026.4.30` | 构建使用的 Git 引用（tag/branch） |
+
+构建完成后，可验证镜像：
+
+```bash
+docker images | grep hermes
+# hermes-eval    latest    ...    ...
+# hermes-agent   latest    ...    ...
+```
+
+**第二步：运行推理**
+
+将 `--agent_type` 从 `hermes` 改为 `hermes_docker`，其余参数完全相同：
+
+```bash
+cd /data/projects/AIDABench
+python infer/run.py \
+    --dataset open_ended_test \
+    --api_key sk-xxx \
+    --base_url https://your-api-gateway/v1 \
+    --model_name claude-opus-4-6 \
+    --save_name claude-opus-4-6 \
+    --agent_type hermes_docker \
+    --max_rounds 60 \
+    --num_workers 2 \
+    --provider anthropic
+```
+
+**运行原理**
+
+对每个任务，`HermesDockerAgent` 会：
+1. 准备工作空间，将任务输入文件复制到临时目录
+2. 启动 `docker run --rm` 容器，挂载工作空间和输出目录
+3. 容器内 `oneshot.py` 读取环境变量，调用 Hermes agent 执行任务
+4. 容器退出后，从输出目录读取 `result.json`、`messages.jsonl`、`meta.json`
+
+```
+宿主机                          Docker 容器 (hermes-eval)
+┌─────────────┐                ┌─────────────────────────┐
+│ workspace/  │ ──mount──▶     │ /workspace/             │
+│   inputs/   │                │   inputs/   (只读)       │
+│   outputs/  │                │   outputs/  (可写)       │
+├─────────────┤                ├─────────────────────────┤
+│ eval_output/│ ◀──mount──     │ /eval_output/           │
+│   result.json               │   (oneshot.py 写入结果)   │
+│   messages.jsonl            │                          │
+│   meta.json                 │                          │
+└─────────────┘                └─────────────────────────┘
+```
+
 #### 参数说明
 
 | 参数 | 说明 |
@@ -181,12 +263,15 @@ python infer/run.py \
 | `--base_url` | API 网关地址 |
 | `--model_name` | 模型 ID |
 | `--save_name` | 输出目录名（默认同 model_name） |
-| `--agent_type` | Agent 类型，open-ended 任务用 `hermes` |
+| `--agent_type` | Agent 类型：`hermes`（本地 CLI）或 `hermes_docker`（Docker 容器化） |
 | `--max_rounds` | Hermes 最大交互轮数（建议 60） |
 | `--num_workers` | 并行 worker 数 |
 | `--provider` | Anthropic 模型需设为 `anthropic` |
 
-输出目录结构：
+#### 输出目录结构
+
+两种方式的输出格式完全相同：
+
 ```
 output/preds/{save_name}/open_ended_test/
 ├── conv/                    # 推理结果
@@ -317,6 +402,24 @@ python evaluation/runner/eval_open_ended.py \
 ---
 
 ## 常见问题
+
+### hermes 和 hermes_docker 有什么区别？
+
+| 对比项 | `hermes` | `hermes_docker` |
+|--------|----------|------------------|
+| 运行方式 | 宿主机直接调用 hermes CLI | 每个任务启动独立 Docker 容器 |
+| 环境要求 | 需安装 hermes CLI | 需安装 Docker + 构建镜像 |
+| 隔离性 | 共享宿主机文件系统 | 容器级隔离 |
+| 会话恢复 | 支持 `continue_session` | 不支持（无状态容器） |
+| 结果格式 | 完全相同 | 完全相同 |
+
+### 如何构建 Docker 镜像？
+
+```bash
+bash docker/build.sh
+```
+
+首次构建会自动从 GitHub 克隆 hermes-agent 源码并构建基础镜像，整个过程约 5-10 分钟。后续只需构建评测镜像（几秒钟）。
 
 ### Anthropic 模型报错 "No Anthropic credentials found"
 

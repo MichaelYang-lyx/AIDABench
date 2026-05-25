@@ -24,6 +24,10 @@ try:
 except ImportError:
     pass
 try:
+    from agents.hermes_docker_agent import HermesDockerAgent
+except ImportError:
+    HermesDockerAgent = None
+try:
     from agents.skill_jupyter_agent import SkillJupyterAgent
 except ImportError:
     pass
@@ -255,6 +259,9 @@ def run(args):
     if hasattr(args, 'agent_type'):
         if args.agent_type in ('hermes_agent', 'hermes'):
             agent_class = HermesAgent
+            use_hermes = True
+        elif args.agent_type in ('hermes_docker_agent', 'hermes_docker'):
+            agent_class = HermesDockerAgent
             use_hermes = True
         elif args.agent_type == 'skill_jupyter_agent':
             agent_class = SkillJupyterAgent
