@@ -191,7 +191,7 @@ def cross_validate_findings(
     and ask them to score (0-5) whether the finding is factually correct and valuable.
     Returns findings with average score >= 3, sorted by score descending.
     """
-    from agents.hermes_agent import HermesAgent
+    from agents.hermes_docker_agent import HermesDockerAgent as HermesAgent
 
     if not non_consensus_findings:
         return []
@@ -229,6 +229,15 @@ def cross_validate_findings(
                     safe_model_id = model_id.replace('/', '_').replace(' ', '_').replace('.', '-').lower()
                     fallback_profile = re.sub(r'[^a-z0-9_-]', '-', f"ref_{task_id}_{safe_model_id}_{task_id}".lower())[:64]
                     hermes_profile = trace.get("hermes_profile") or fallback_profile
+                    # docker 模式：从 trace 提取消息历史作为 prefill 注入新容器
+                    history_messages = []
+                    fr_history = trace.get("first_round_history") or []
+                    if isinstance(fr_history, list) and fr_history:
+                        elem = fr_history[0]
+                        if isinstance(elem, dict) and isinstance(elem.get("messages"), list):
+                            history_messages = elem["messages"]
+                        elif isinstance(elem, dict) and elem.get("role"):
+                            history_messages = fr_history
                     model_sessions[model_name] = {
                         "session_id": session_id,
                         "workspace": workspace,
@@ -237,6 +246,7 @@ def cross_validate_findings(
                         "api_key": api_key,
                         "provider": provider,
                         "profile": hermes_profile,
+                        "messages_history": history_messages,
                     }
             except Exception:
                 continue
@@ -247,69 +257,88 @@ def cross_validate_findings(
 
     print(f"    Loaded {len(model_sessions)} model sessions for cross-validation")
 
-    if language == "zh":
-        validation_prompt_template = """你之前已经分析过这份数据。现在请评估以下发现是否正确且有价值。
-你可以编写代码验证该发现的数值是否准确。
+    def _build_batch_prompt(batch_findings: List[Dict], lang: str) -> str:
+        n = len(batch_findings)
+        items = []
+        for idx, fnd in enumerate(batch_findings, start=1):
+            patt = fnd.get("pattern", "")
+            ev_list = fnd.get("evidence", [])
+            ev_str = "\n".join(str(e) for e in ev_list if e) or "N/A"
+            if lang == "zh":
+                items.append(f"## 发现 {idx}：\n{patt}\n\n### 证据 {idx}：\n{ev_str}")
+            else:
+                items.append(f"## Finding {idx}:\n{patt}\n\n### Evidence {idx}:\n{ev_str}")
+        body = "\n\n".join(items)
 
-## 待验证发现：
-{pattern}
+        if lang == "zh":
+            return f"""你之前已经分析过这份数据。现在请评估以下 {n} 个发现是否正确且有价值。
+你可以编写代码验证这些发现的数值是否准确。
 
-## 证据：
-{evidence}
+{body}
 
-请按以下标准打分（0-5分）并简要说明理由：
+请按以下标准对每个发现打分（0-5分）并简要说明理由：
 - 5分：发现完全正确，数值准确，且揭示了非显而易见的重要洞察
 - 4分：发现正确，数值基本准确，具有一定分析价值
 - 3分：发现大致正确，但数值有小幅偏差或结论较为常规
 - 2分：发现部分正确，但存在明显的数值错误或逻辑漏洞
 - 1分：发现大部分不正确，或证据严重不足
 - 0分：发现完全错误，或与数据无关
-请严格按以下 JSON 格式输出（不要输出其他内容）：
+
+请严格按以下 JSON 数组格式输出 {n} 个评分（顺序与上面一致，不要输出其他内容）：
 ```json
-{{"score": X, "reason": "..."}}
+[
+  {{"index": 1, "score": X, "reason": "..."}},
+  {{"index": 2, "score": X, "reason": "..."}}
+]
 ```"""
-    else:
-        validation_prompt_template = """You have already analyzed this dataset. Now evaluate whether the following finding is correct and valuable.
+        else:
+            return f"""You have already analyzed this dataset. Now evaluate whether the following {n} findings are correct and valuable.
 You may write code to verify the numerical claims.
 
-## Finding to validate:
-{pattern}
+{body}
 
-## Evidence:
-{evidence}
-
-Score this finding using the following rubric and briefly explain:
+Score each finding using the following rubric and briefly explain:
 - 5: Completely correct, numerically accurate, reveals a non-obvious and important insight
 - 4: Correct, numerically sound, provides meaningful analytical value
 - 3: Mostly correct, minor numerical deviations or somewhat routine conclusion
 - 2: Partially correct, but has notable numerical errors or logical gaps
 - 1: Mostly incorrect, or severely lacking in supporting evidence
 - 0: Entirely wrong, or unrelated to the data
-Output strictly in this JSON format:
+
+Output strictly as a JSON array of {n} scores (in the same order as above, no other content):
 ```json
-{{"score": X, "reason": "..."}}
+[
+  {{"index": 1, "score": X, "reason": "..."}},
+  {{"index": 2, "score": X, "reason": "..."}}
+]
 ```"""
 
-    validated = []
+    # Pre-compute per-model finding indices (skip findings the validator itself proposed)
+    BATCH_SIZE = 5
+    per_model_indices: Dict[str, List[int]] = {mname: [] for mname in model_sessions}
+    for fi, finding in enumerate(non_consensus_findings):
+        source_models = finding.get("models", [])
+        for mname in model_sessions:
+            if mname not in source_models:
+                per_model_indices[mname].append(fi)
+
+    # finding_index -> list of (model_name, score, raw_response)
+    per_finding_validations: Dict[int, List[Dict]] = {fi: [] for fi in range(len(non_consensus_findings))}
     cv_traces = {mname: [] for mname in model_sessions}
 
-    for fi, finding in enumerate(non_consensus_findings):
-        pattern = finding.get("pattern", "")
-        evidence_list = finding.get("evidence", [])
-        source_models = finding.get("models", [])
-        evidence_str = "\n".join(str(e) for e in evidence_list if e) or "N/A"
+    total_findings = len(non_consensus_findings)
+    for mname, minfo in model_sessions.items():
+        indices = per_model_indices[mname]
+        if not indices:
+            continue
+        n_batches = (len(indices) + BATCH_SIZE - 1) // BATCH_SIZE
+        for bi in range(n_batches):
+            batch_idx_slice = indices[bi * BATCH_SIZE:(bi + 1) * BATCH_SIZE]
+            batch_findings = [non_consensus_findings[i] for i in batch_idx_slice]
+            n = len(batch_findings)
+            prompt = _build_batch_prompt(batch_findings, language)
 
-        prompt = validation_prompt_template.format(pattern=pattern, evidence=evidence_str)
-
-        scores = []
-        validations = []
-
-        for mname, minfo in model_sessions.items():
-            # Skip the model that proposed this finding
-            if mname in source_models:
-                continue
-
-            print(f"      [{fi+1}/{len(non_consensus_findings)}] Validating with {mname}...")
+            print(f"      [{mname}] batch {bi+1}/{n_batches}: validating {n} findings (orig idx {batch_idx_slice})...")
 
             agent = HermesAgent(
                 api_key=minfo["api_key"],
@@ -325,31 +354,49 @@ Output strictly in this JSON format:
                 session_id=minfo["session_id"],
                 query=prompt,
                 work_dir=minfo["workspace"],
+                messages_history=minfo.get("messages_history") or [],
             )
 
             resp = result.get("model_response", "")
-            score = _parse_validation_score(resp)
-            if score == 0 and resp:
-                print(f"        [DEBUG] {mname} response (first 200): {resp[:200]}")
+            scores = _parse_batch_validation_scores(resp, n)
+            if all(s == 0 for s in scores) and resp:
+                print(f"        [DEBUG] {mname} batch response (first 300): {resp[:300]}")
             elif not resp:
-                print(f"        [DEBUG] {mname} returned empty response")
-            scores.append(score)
-            validations.append({
-                "model": mname,
-                "score": score,
-                "raw_response": resp[:500],
-            })
+                print(f"        [DEBUG] {mname} returned empty response for batch")
+
+            for local_i, fi in enumerate(batch_idx_slice):
+                score = scores[local_i] if local_i < len(scores) else 0.0
+                per_finding_validations[fi].append({
+                    "model": mname,
+                    "score": score,
+                    "raw_response": resp[:500],
+                })
+                cv_traces[mname].append({
+                    "finding_index": fi,
+                    "batch_index": bi,
+                    "batch_position": local_i,
+                    "pattern": non_consensus_findings[fi].get("pattern", ""),
+                    "score": score,
+                    "session_id": minfo["session_id"],
+                })
+            # One trace entry per batch for full prompt/response
             cv_traces[mname].append({
-                "finding_index": fi,
-                "pattern": pattern,
+                "batch_index": bi,
+                "batch_finding_indices": batch_idx_slice,
                 "prompt": prompt,
                 "response": resp,
-                "score": score,
                 "session_id": minfo["session_id"],
                 "history": result.get("history", []),
             })
 
-        avg_score = sum(scores) / len(scores) if scores else 0
+    validated = []
+    for fi, finding in enumerate(non_consensus_findings):
+        pattern = finding.get("pattern", "")
+        evidence_list = finding.get("evidence", [])
+        source_models = finding.get("models", [])
+        validations = per_finding_validations[fi]
+        scores_for_finding = [v["score"] for v in validations]
+        avg_score = sum(scores_for_finding) / len(scores_for_finding) if scores_for_finding else 0
 
         validated.append({
             "pattern": pattern,
@@ -359,7 +406,7 @@ Output strictly in this JSON format:
             "validations": validations,
         })
 
-        print(f"      [{fi+1}/{len(non_consensus_findings)}] \"{pattern[:50]}...\" avg_score={avg_score:.1f}")
+        print(f"      [{fi+1}/{total_findings}] \"{pattern[:50]}...\" avg_score={avg_score:.1f}")
 
     # Save per-model cross-validation traces
     for mname, traces in cv_traces.items():
@@ -418,6 +465,77 @@ def _parse_validation_score(response: str) -> float:
     return 0.0
 
 
+def _parse_batch_validation_scores(response: str, expected_n: int) -> List[float]:
+    """Parse a JSON array of {index, score, reason} entries.
+
+    Returns a list of length expected_n. Missing/unparseable slots default to 0.0.
+    Handles common deviations: array wrapped in ```json``` block, single dict
+    instead of array (n==1), or score-only objects without explicit index.
+    """
+    import re as _re
+
+    scores = [0.0] * expected_n
+
+    def _apply(items):
+        """Populate `scores` from a list of dicts using 1-based 'index' if present, else position."""
+        for pos, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            try:
+                s = float(item.get("score", 0))
+            except (ValueError, TypeError):
+                s = 0.0
+            idx = item.get("index")
+            if isinstance(idx, (int, float)) and 1 <= int(idx) <= expected_n:
+                scores[int(idx) - 1] = s
+            elif pos < expected_n:
+                scores[pos] = s
+
+    # Try fenced JSON block first
+    try:
+        match = _re.search(r'```(?:json)?\s*(\[.*?\])\s*```', response, _re.DOTALL)
+        if match:
+            data = json.loads(match.group(1))
+            if isinstance(data, list):
+                _apply(data)
+                return scores
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Try raw JSON array anywhere in the response
+    try:
+        match = _re.search(r'\[\s*\{.*?\}\s*\]', response, _re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            if isinstance(data, list):
+                _apply(data)
+                return scores
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Fenced JSON containing a single object (n==1 case)
+    if expected_n == 1:
+        try:
+            match = _re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, _re.DOTALL)
+            if match:
+                data = json.loads(match.group(1))
+                if isinstance(data, dict):
+                    _apply([data])
+                    return scores
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Fallback: enumerate "score": X occurrences in order
+    matches = _re.findall(r'"score"\s*:\s*(\d+(?:\.\d+)?)', response)
+    for pos, m in enumerate(matches[:expected_n]):
+        try:
+            scores[pos] = float(m)
+        except ValueError:
+            pass
+
+    return scores
+
+
 def cache_cross_validation(cache_path: str, task_id: str, validated_findings: List[Dict]):
     """Cache cross-validation results."""
     task_dir = get_task_cache_dir(cache_path, task_id)
@@ -448,7 +566,7 @@ def run_reference_models(query: str, data_description: str, config: Dict,
     Args:
         max_workers: Number of parallel workers for running reference models (default: 1 for serial)
     """
-    from agents.hermes_agent import HermesAgent
+    from agents.hermes_docker_agent import HermesDockerAgent as HermesAgent
 
     def _run_single_model(model: Dict) -> Dict:
         model_name = model['name']
@@ -543,11 +661,14 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                 insight_result = {'history': fallback_result.get('history', [])}
             else:
                 work_dir = os.path.join(model_dir, "workspace")
+                # docker 模式：把上一轮的消息历史作为 prefill 注入新容器
+                first_round_messages = hermes_result.get('history') or []
                 insight_result = agent.continue_session(
                     session_id=session_id,
                     query=insight_extraction_prompt,
                     work_dir=work_dir,
                     profile=hermes_result.get('profile'),
+                    messages_history=first_round_messages,
                 )
 
                 t_end = time.time()
@@ -689,9 +810,10 @@ def build_reference_cache(args):
         print(f"  [{task_id}] Cross-validating non-consensus findings...")
         validated_l3 = cross_validate_findings(
             non_consensus_findings=non_consensus_findings,
-            reference_responses=valid_responses,
-            consensus_cfg=consensus_cfg,
-            language=getattr(args, 'language', 'zh')
+            cache_path=cache_path,
+            task_id=task_id,
+            config=config,
+            language=getattr(args, 'language', 'zh'),
         )
         print(f"  [{task_id}] Cross-validation: {len(validated_l3)} findings passed")
         cache_cross_validation(cache_path, task_id, validated_l3)

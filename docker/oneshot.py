@@ -65,6 +65,103 @@ def main() -> int:
     max_iters = int(os.environ.get("HERMES_MAX_ITERATIONS") or "60")
     provider = os.environ.get("HERMES_PROVIDER") or None
 
+    # 对非 custom provider（如 anthropic），剥掉 base_url 末尾的 /v1
+    # 否则 Anthropic SDK 会拼成 /v1/v1/messages 触发 404
+    base_url = os.environ["HERMES_BASE_URL"]
+    if provider and provider != "custom" and base_url:
+        base_url = base_url.rstrip("/")
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+
+    prefill_messages: list = []
+    prefill_path = os.environ.get("HERMES_PREFILL_PATH")
+    if prefill_path and Path(prefill_path).is_file():
+        raw_prefill: list = []
+        with open(prefill_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw_prefill.append(json.loads(line))
+                except Exception:
+                    pass
+        # Preserve tool_calls + tool replies so the model retains full context
+        # (queries it ran, results/files/charts it produced). Two-pass cleanup:
+        #   Pass 1: collect tool_call ids that have a matching tool reply.
+        #   Pass 2: emit normalized messages, dropping unpaired tool calls/replies
+        #   (Anthropic / OpenAI APIs reject messages with orphan tool_call_id).
+        declared_ids: set = set()
+        replied_ids: set = set()
+        for m in raw_prefill:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            if role == "assistant":
+                for tc in (m.get("tool_calls") or []):
+                    tid = tc.get("id") or tc.get("call_id")
+                    if tid:
+                        declared_ids.add(tid)
+            elif role == "tool":
+                tid = m.get("tool_call_id")
+                if tid:
+                    replied_ids.add(tid)
+        valid_ids = declared_ids & replied_ids
+
+        def _norm_tc(tc: dict):
+            tid = tc.get("id") or tc.get("call_id")
+            if not tid or tid not in valid_ids:
+                return None
+            fn = tc.get("function") or {}
+            args = fn.get("arguments", "")
+            if not isinstance(args, str):
+                args = json.dumps(args, ensure_ascii=False)
+            return {
+                "id": tid,
+                "type": tc.get("type", "function"),
+                "function": {"name": fn.get("name", ""), "arguments": args},
+            }
+
+        for m in raw_prefill:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "user":
+                if isinstance(content, str) and content.strip():
+                    prefill_messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                content_str = content if isinstance(content, str) else ""
+                kept_tcs = []
+                for tc in (m.get("tool_calls") or []):
+                    norm = _norm_tc(tc)
+                    if norm is not None:
+                        kept_tcs.append(norm)
+                if kept_tcs:
+                    prefill_messages.append({
+                        "role": "assistant",
+                        "content": content_str,
+                        "tool_calls": kept_tcs,
+                    })
+                elif content_str.strip():
+                    prefill_messages.append({"role": "assistant", "content": content_str})
+                # else: empty assistant with no valid tool_calls -> drop
+            elif role == "tool":
+                tid = m.get("tool_call_id")
+                if tid and tid in valid_ids:
+                    if not isinstance(content, str):
+                        content = json.dumps(content, ensure_ascii=False)
+                    prefill_messages.append({
+                        "role": "tool",
+                        "content": content,
+                        "tool_call_id": tid,
+                    })
+        print(
+            f"[oneshot] loaded {len(prefill_messages)} prefill messages "
+            f"(from {len(raw_prefill)} raw, {len(valid_ids)} paired tool calls) at {prefill_path}",
+            flush=True,
+        )
+
     from run_agent import AIAgent
 
     print(f"[oneshot] task_id={task_id} model={model} max_iter={max_iters} provider={provider or '(default)'}", flush=True)
@@ -75,7 +172,7 @@ def main() -> int:
     err = None
     try:
         agent = AIAgent(
-            base_url=os.environ["HERMES_BASE_URL"],
+            base_url=base_url,
             api_key=os.environ["HERMES_API_KEY"],
             model=model,
             provider=provider,
@@ -85,6 +182,7 @@ def main() -> int:
             skip_memory=True,
             save_trajectories=False,
             quiet_mode=True,
+            prefill_messages=prefill_messages,
         )
         # Strip "default" from tool schemas — Claude API rejects it as invalid
         # under JSON Schema draft 2020-12 for tool definitions.
