@@ -1,5 +1,6 @@
 .env
 test/
+tests/
 .venv/
 docs_2/
 some_functions/
@@ -13,12 +14,32 @@ __pycache__/
 output/
 data/
 raw_data/
-run_claude.sh
-run_ds.sh
-run_gemini.sh
-run_qwen30.sh
-run_qwenmax.sh
+/run_*.sh
 yantao_output
 Edit-Banana
-configs/reference_models.json
+configs/reference_models*.json
 workspaces/
+
+# local / generated
+.claude/
+note
+note.txt
+test.txt
+EVAL_STATUS_REPORT.txt
+docs/note
+docs/note2.text
+
+# benchmark data (publish/download separately)
+qa_open/
+data_1/
+examples/
+open_ended_rubrics/
+skills/Image_Caption/
+skills/Excel_WorkFlow/
+skills_minimax/
+map/
+scripts/
+score.py
+curate-examples/
+convert_qa_to_open_ended.py
+QA_TO_OPEN_ENDED_CONVERSION.md

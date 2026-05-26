@@ -110,7 +110,7 @@ class LLMJudge:
         judge_workspace_dir: str = None,
     ) -> Dict[str, Any]:
         """Perform evaluation using HermesAgent with code execution."""
-        from agents.hermes_agent import HermesAgent
+        from agents.hermes_docker_agent import HermesDockerAgent as HermesAgent
 
         rubric_text = self._format_rubric(rubric)
 
