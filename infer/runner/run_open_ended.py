@@ -62,18 +62,25 @@ Be thorough and quantitative - include specific numbers, percentages, and statis
 
 
 def _read_workspace_output(workspace_dir: str) -> str:
-    """Read output files from workspace when model_response is empty or invalid."""
+    """Read output files from workspace when model_response is empty or invalid.
+
+    Scans the top level and common output subdirectories (including `inputs/`,
+    where models sometimes drop their generated reports alongside the raw input
+    files). Original raw data files (.xls/.xlsx/.pdf/.docx/.zip/...) are filtered
+    out by the extension whitelist below.
+    """
     if not os.path.isdir(workspace_dir):
         return ""
-    # Look for generated report/output files (exclude inputs/ directory)
-    output_extensions = ('.md', '.txt', '.csv', '.json')
+    output_extensions = ('.md', '.txt', '.csv', '.json', '.html')
     candidates = []
     for item in os.listdir(workspace_dir):
         item_path = os.path.join(workspace_dir, item)
         if os.path.isfile(item_path) and item.lower().endswith(output_extensions):
             candidates.append(item_path)
-    # Also check outputs/ or output_report/ subdirectories
-    for subdir in ['outputs', 'output_report', 'output']:
+    # Also scan common subdirectories. `inputs/` is included because some models
+    # save their generated reports there next to the original data — the extension
+    # whitelist still keeps raw inputs (.xls/.xlsx/.pdf/...) out.
+    for subdir in ['outputs', 'output_report', 'output', 'inputs', 'reports', 'charts']:
         sub_path = os.path.join(workspace_dir, subdir)
         if os.path.isdir(sub_path):
             for item in os.listdir(sub_path):
@@ -82,9 +89,10 @@ def _read_workspace_output(workspace_dir: str) -> str:
                     candidates.append(item_path)
     if not candidates:
         return ""
-    # Prefer .md files, then .txt, then others; pick the largest
+    # Prefer .md, then .html, .txt, .csv, .json; among same extension, prefer largest.
+    ext_rank = {'.md': 0, '.html': 1, '.txt': 2, '.csv': 3, '.json': 4}
     candidates.sort(key=lambda p: (
-        0 if p.endswith('.md') else 1 if p.endswith('.txt') else 2,
+        ext_rank.get(os.path.splitext(p)[1].lower(), 9),
         -os.path.getsize(p)
     ))
     try:

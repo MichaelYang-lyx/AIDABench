@@ -8,11 +8,67 @@ Supports Hermes-based evaluation (code execution for verification).
 import json
 import os
 import re
+import shutil
 
 import statistics
 from pathlib import Path
 from typing import Dict, Any, List
 from openai import OpenAI
+
+try:
+    import json_repair  # type: ignore
+except ImportError:
+    json_repair = None
+
+
+_NOISE_DIR_NAMES = {
+    '__pycache__', '.git', '.mypy_cache', '.pytest_cache',
+    '.venv', 'venv', 'env', '.env', 'node_modules', '.ipynb_checkpoints',
+}
+
+
+def _is_python_venv(path: str) -> bool:
+    """A directory is a Python virtualenv if it contains pyvenv.cfg at its root."""
+    return os.path.isfile(os.path.join(path, 'pyvenv.cfg'))
+
+
+def _copy_ignore(src: str, names: list) -> list:
+    """ignore callable for copytree: skip noise dirs and nested virtualenvs."""
+    ignored = []
+    for n in names:
+        full = os.path.join(src, n)
+        if n in _NOISE_DIR_NAMES:
+            ignored.append(n)
+        elif os.path.isdir(full) and _is_python_venv(full):
+            ignored.append(n)
+    return ignored
+
+
+def _copy_into(src_path: str, dst_path: Path) -> None:
+    """Copy a file or directory tree into dst_path.
+
+    We copy instead of symlink because the judge runs inside a docker container
+    where only the judge workspace is bind-mounted: symlinks pointing to absolute
+    host paths outside the workspace would be broken inside the container.
+
+    Skips Python virtualenvs (detected via pyvenv.cfg) and well-known noise
+    directories, and tolerates broken symlinks instead of crashing the copy.
+    """
+    if os.path.isdir(src_path):
+        # Skip entire venv if the root path itself is one (e.g. model's ocr_env/).
+        if _is_python_venv(src_path):
+            return
+        shutil.copytree(
+            src_path, dst_path,
+            dirs_exist_ok=True,
+            symlinks=False,
+            ignore=_copy_ignore,
+            ignore_dangling_symlinks=True,
+        )
+    elif os.path.isfile(src_path):
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        if not dst_path.exists():
+            shutil.copy2(src_path, dst_path)
 
 
 class LLMJudge:
@@ -124,29 +180,37 @@ class LLMJudge:
             ))
         judge_workspace.mkdir(parents=True, exist_ok=True)
 
-        # Write model response to workspace
-        response_file = judge_workspace / "model_response.md"
-        response_file.write_text(analysis_output, encoding="utf-8")
-
-        # Symlink original data files into workspace/inputs/
-        inputs_dir = judge_workspace / "inputs"
-        inputs_dir.mkdir(exist_ok=True)
-        if data_files:
-            for src in data_files:
-                if os.path.exists(src):
-                    dst = inputs_dir / os.path.basename(src)
-                    if not dst.exists() and not dst.is_symlink():
-                        dst.symlink_to(os.path.abspath(src))
-
-        # Copy/symlink model output workspace files
-        model_output_dir = judge_workspace / "model_output"
-        model_output_dir.mkdir(exist_ok=True)
+        # Strategy: copy the model's entire workspace as the judge workspace base,
+        # then drop model_response.md alongside it. This mirrors exactly what the
+        # tested model saw and produced — its ./inputs/ already contains the raw
+        # data, its ./outputs/ (or wherever it chose) contains its deliverables.
+        # We copy rather than symlink because the judge runs inside a docker
+        # container that only bind-mounts the judge workspace; symlinks to host
+        # absolute paths would be broken inside the container.
         if model_output_workspace and os.path.isdir(model_output_workspace):
             for item in os.listdir(model_output_workspace):
+                # Skip hidden runtime artifacts (prefill jsonl, judge metadata)
+                # and noise (__pycache__). Also skip a colliding model_response.md
+                # if any (ours takes priority).
+                if item.startswith('.') or item == '__pycache__' or item == 'model_response.md':
+                    continue
                 src_path = os.path.join(model_output_workspace, item)
-                dst_path = model_output_dir / item
-                if os.path.isfile(src_path) and not dst_path.exists():
-                    dst_path.symlink_to(os.path.abspath(src_path))
+                _copy_into(src_path, judge_workspace / item)
+
+        # Fallback: if the model's workspace didn't include ./inputs/ (or it's
+        # empty), populate it from the pristine data_files passed by the caller
+        # so the judge can still verify numeric claims against original data.
+        inputs_dir = judge_workspace / "inputs"
+        inputs_dir.mkdir(exist_ok=True)
+        if data_files and not any(inputs_dir.iterdir()):
+            for src in data_files:
+                if os.path.exists(src):
+                    _copy_into(src, inputs_dir / os.path.basename(src))
+
+        # Write the model's final assistant message as a sibling file. Done last
+        # so it can't be clobbered by the workspace copy above.
+        response_file = judge_workspace / "model_response.md"
+        response_file.write_text(analysis_output, encoding="utf-8")
 
         # Build query for hermes judge
         query = f"""你是一个严格的数据分析评估专家。你需要评估一份数据分析报告的质量。
@@ -154,20 +218,22 @@ class LLMJudge:
 ## 原始任务：
 {task_description}
 
-## 被测模型的分析报告：
-见 ./model_response.md
+## 工作目录说明
+当前工作目录 `.` 就是**被测模型当时跑任务的工作区**的完整快照，结构与模型当时看到的完全一致，再外加一个 `./model_response.md`：
 
-## 原始数据文件：
-位于 ./inputs/ 目录
+- `./model_response.md` — 被测模型最后一条 assistant 回复（**可能只是简短结论，不一定是完整报告**）。
+- `./inputs/` — 原始数据文件（模型当时拿到的输入）。
+- 其它一切目录与文件（例如 `./outputs/`、`./charts/`、顶层的 .md/.html/.csv/.png/.docx/.ipynb、`./inputs/` 内除原始数据外的文件等）都是**被测模型自己生成的交付物**。被测模型把图表、CSV、报告写到哪个子目录是它自己的选择，没有统一约定。
 
 ## 评分标准（Rubric）：
 {rubric_text}
 
 ## 评估要求：
-1. 先阅读 ./model_response.md 中被测模型的分析报告
-2. 对报告中的关键数值和结论，编写 Python 代码加载 ./inputs/ 中的原始数据进行验证
-3. 根据验证结果和上述 Rubric 逐项评分（每项给 0 到满分之间的分数）
-4. 最终输出严格的 JSON 格式评分结果，格式如下：
+1. **先把模型的实际交付物找全**：用 `find . -maxdepth 3 -type f | sort`（或 `ls -R`）列出工作目录下所有文件；打开关键的报告类文件（.md / .html / .txt / .docx / .ipynb）以及图表查看实际内容。
+2. **绝对不要只看 `./model_response.md` 的简短摘要打分** —— 模型常常把 model_response 写成一句"分析完成，结果保存在 X.md"之类的话，真正的交付内容在工作目录里的具体文件中。务必读完文件再评分。
+3. 对报告中的关键数值和结论，编写 Python 代码加载 `./inputs/` 中的原始数据进行验证（若 `./inputs/` 为空或缺失，可放宽数值验证，主要依据交付物本身的完整性、一致性与质量评分）。
+4. 根据验证结果和上述 Rubric 逐项评分（每项给 0 到满分之间的分数）。
+5. 最终输出严格的 JSON 格式评分结果，格式如下：
 
 ```json
 {{
@@ -235,40 +301,15 @@ class LLMJudge:
 
     def _parse_judge_result(self, content: str, run_idx: int) -> Dict[str, Any]:
         """Parse judge result from hermes output."""
-        try:
-            try:
-                result = json.loads(content)
-            except json.JSONDecodeError:
-                match = re.search(r'```(?:json)?\s*(.*?)```', content, re.DOTALL)
-                if match:
-                    result = json.loads(match.group(1))
-                else:
-                    # Try to find JSON object in the text
-                    match = re.search(r'\{[^{}]*"total_score"[^{}]*\}', content, re.DOTALL)
-                    if match:
-                        result = json.loads(match.group(0))
-                    else:
-                        # Last resort: find the largest JSON-like block
-                        matches = re.findall(r'\{.*?\}', content, re.DOTALL)
-                        result = None
-                        for m in reversed(matches):
-                            try:
-                                candidate = json.loads(m)
-                                if "total_score" in candidate:
-                                    result = candidate
-                                    break
-                            except json.JSONDecodeError:
-                                continue
-                        if result is None:
-                            raise ValueError("No valid JSON found")
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"Warning: Failed to parse hermes judge result (run {run_idx}): {e}")
+        result = self._try_parse_judge_json(content)
+        if result is None:
+            print(f"Warning: Failed to parse hermes judge result (run {run_idx})")
             result = {
                 "layer1_scores": [],
                 "layer2_scores": [],
                 "layer3_scores": [],
                 "total_score": 0,
-                "summary": f"Parsing failed: {e}",
+                "summary": "Parsing failed",
             }
 
         layer_scores = {
@@ -282,6 +323,108 @@ class LLMJudge:
             "layer_scores": layer_scores,
             "feedback": result,
         }
+
+    @staticmethod
+    def _repair_llm_json(s: str) -> str:
+        """Repair common LLM-generated JSON quirks that break json.loads.
+
+        - \\' is invalid JSON (single quotes don't need escaping); strip the backslash.
+        - Smart quotes are folded to plain ASCII " and '.
+        - Trailing commas before } or ] are stripped.
+        """
+        s = s.replace("\\'", "'")
+        s = s.replace("“", '"').replace("”", '"')
+        s = s.replace("‘", "'").replace("’", "'")
+        s = re.sub(r',(\s*[}\]])', r'\1', s)
+        return s
+
+    @staticmethod
+    def _iter_balanced_braces(text: str):
+        """Yield balanced { ... } substrings of `text`, longest first.
+
+        Skips braces inside double-quoted string literals (handling \\" escapes),
+        so JSON-like blocks containing braces inside string values are matched correctly.
+        """
+        candidates = []
+        n = len(text)
+        i = 0
+        while i < n:
+            if text[i] != '{':
+                i += 1
+                continue
+            depth = 0
+            j = i
+            in_str = False
+            escape = False
+            while j < n:
+                c = text[j]
+                if in_str:
+                    if escape:
+                        escape = False
+                    elif c == '\\':
+                        escape = True
+                    elif c == '"':
+                        in_str = False
+                else:
+                    if c == '"':
+                        in_str = True
+                    elif c == '{':
+                        depth += 1
+                    elif c == '}':
+                        depth -= 1
+                        if depth == 0:
+                            candidates.append(text[i:j + 1])
+                            break
+                j += 1
+            i = (j + 1) if depth == 0 else (i + 1)
+        candidates.sort(key=len, reverse=True)
+        for c in candidates:
+            yield c
+
+    @classmethod
+    def _try_parse_judge_json(cls, content: str):
+        """Try multiple strategies + LLM-JSON repairs. Returns dict or None."""
+        def _attempt(s: str):
+            # Stage 1: stdlib json on raw + simple-repair forms
+            for raw in (s, cls._repair_llm_json(s)):
+                try:
+                    d = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(d, dict) and "total_score" in d:
+                    return d
+            # Stage 2: json_repair — tolerates unescaped quotes inside string values,
+            # truncated JSON, trailing junk, smart quotes, etc. Required for Chinese
+            # judge responses that quote terms like "先天不足" inside reason strings.
+            if json_repair is not None:
+                try:
+                    d = json_repair.loads(s)
+                except Exception:
+                    d = None
+                if isinstance(d, dict) and "total_score" in d:
+                    return d
+            return None
+
+        # 1) Whole content
+        r = _attempt(content)
+        if r is not None:
+            return r
+
+        # 2) ```json ... ``` fenced blocks (judge may emit multiple — try all)
+        for match in re.finditer(r'```(?:json)?\s*(.*?)```', content, re.DOTALL):
+            r = _attempt(match.group(1))
+            if r is not None:
+                return r
+
+        # 3) Brace-balanced scan: longest balanced { ... } block containing total_score
+        for block in cls._iter_balanced_braces(content):
+            if '"total_score"' not in block:
+                continue
+            r = _attempt(block)
+            if r is not None:
+                return r
+
+        return None
 
     def _single_evaluation(
         self,

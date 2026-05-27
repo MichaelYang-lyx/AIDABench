@@ -1101,8 +1101,9 @@ def run(args):
     print(f"  - Use cache: {use_cache}")
     print(f"  - Cache path: {cache_path}")
 
-    print("\nLoading task config...")
-    ground_truth_map = load_ground_truth_insights()
+    task_config_path = getattr(args, 'task_config', None) or 'data/open_ended_test/test_tasks.json'
+    print(f"\nLoading task config from: {task_config_path}")
+    ground_truth_map = load_ground_truth_insights(task_config_path)
     print(f"  - Loaded config for {len(ground_truth_map)} tasks")
 
     os.makedirs(args.output_path, exist_ok=True)
@@ -1116,24 +1117,33 @@ def run(args):
         return
 
     print("\nStarting evaluation...\n")
-    results = []
     max_workers = getattr(args, 'max_workers', 1)
+    # Pre-allocate so results stay aligned with `dataset` order regardless of
+    # completion order — the `scores` array in summary.json must line up with
+    # the task list (callers compare positionally).
+    results: List[Any] = [None] * len(dataset)
 
     if max_workers == 1:
         for i, row in enumerate(tqdm(dataset, desc="Evaluating tasks")):
-            result = process_single_task(row, i, args, config, ground_truth_map)
-            results.append(result)
+            results[i] = process_single_task(row, i, args, config, ground_truth_map)
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(process_single_task, row, i, args, config, ground_truth_map)
+            future_to_idx = {
+                executor.submit(process_single_task, row, i, args, config, ground_truth_map): i
                 for i, row in enumerate(dataset)
-            ]
-            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Evaluating tasks"):
-                results.append(future.result())
+            }
+            for future in tqdm(concurrent.futures.as_completed(future_to_idx), total=len(future_to_idx), desc="Evaluating tasks"):
+                idx = future_to_idx[future]
+                results[idx] = future.result()
 
-    scores = [r.get('score', 0) for r in results]
-    avg_score = sum(scores) / len(scores) if scores else 0
+    # scores: dict {task_id: score} — explicit keys avoid any positional misalignment
+    scores: Dict[str, float] = {}
+    for i, r in enumerate(results):
+        tid = r.get('id') or r.get('task_id') or f"task_{i}"
+        scores[tid] = r.get('score', 0)
+    # Sort keys so qa_open_001 → qa_open_064 read in natural order in summary.json
+    scores = dict(sorted(scores.items()))
+    avg_score = sum(scores.values()) / len(scores) if scores else 0
 
     print("\n" + "="*50)
     print("Evaluation Complete")
