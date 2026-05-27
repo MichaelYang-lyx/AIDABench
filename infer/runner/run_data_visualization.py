@@ -54,6 +54,10 @@ try:
 except ImportError:
     HermesAgent = None
 try:
+    from agents.hermes_docker_agent import HermesDockerAgent
+except ImportError:
+    HermesDockerAgent = None
+try:
     from agents.xhx_pipeline import XHXPipelineAgent
 except ImportError:
     XHXPipelineAgent = None
@@ -241,6 +245,9 @@ def run(args):
             agent_class = LightLLMJupyterAgent
         elif args.agent_type == 'hermes_agent':
             agent_class = HermesAgent
+            use_hermes = True
+        elif args.agent_type in ('hermes_docker_agent', 'hermes_docker'):
+            agent_class = HermesDockerAgent
             use_hermes = True
         elif args.agent_type == 'xhx_pipeline':
             agent_class = XHXPipelineAgent

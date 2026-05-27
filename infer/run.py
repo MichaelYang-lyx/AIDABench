@@ -55,8 +55,11 @@ def check_and_clean_failed_preds(output_dir):
                         data = json.load(f)
                     
                     model_response = str(data.get("model_response", ""))
-                    if any(err in model_response for err in error_patterns):
-                        print(f"Found failed inference (Error in model_response): {filename}")
+                    has_error = any(err in model_response for err in error_patterns)
+                    is_empty = not model_response.strip()
+                    if has_error or is_empty:
+                        reason = "Error in model_response" if has_error else "empty model_response"
+                        print(f"Found failed inference ({reason}): {filename}")
                         files_to_delete_conv.add(filename)
                         files_to_delete_eval.add(filename)
                 except Exception:
@@ -112,6 +115,13 @@ def check_and_clean_failed_preds(output_dir):
                 os.remove(p)
                 count_conv += 1
                 print(f"Deleted inference file: {p}")
+                # Also delete corresponding workspace directory
+                task_id = fname[:-5]  # strip .json
+                workspace_dir = os.path.join(os.path.dirname(output_dir), 'workspace', task_id)
+                if os.path.isdir(workspace_dir):
+                    import shutil
+                    shutil.rmtree(workspace_dir)
+                    print(f"Deleted workspace: {workspace_dir}")
             except OSError as e:
                 print(f"Error deleting {p}: {e}")
     
