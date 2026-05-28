@@ -42,4 +42,5 @@ scripts/
 score.py
 curate-examples/
 convert_qa_to_open_ended.py
+convert_wps2_to_open_ended.py
 QA_TO_OPEN_ENDED_CONVERSION.md
