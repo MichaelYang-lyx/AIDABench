@@ -612,7 +612,17 @@ def run_reference_models(query: str, data_description: str, config: Dict,
 
             hermes_result = agent.interact(
                 query=hermes_query,
-                system_prompt="You are an expert data analyst. Analyze the dataset thoroughly.",
+                system_prompt=(
+                    "You are an expert data analyst. Analyze the dataset thoroughly and let the data speak. "
+                    "Do not assume the hypothesis or premise embedded in the question is correct. "
+                    "If the data does NOT support the question's premise (e.g. the question asks to identify "
+                    "an increasing trend / a correlation / an imbalance, but the data shows none), state the "
+                    "absence explicitly with evidence — null findings are valid and important answers, do not "
+                    "fabricate patterns to satisfy the question. "
+                    "If the dataset lacks the columns or fields the task requires (e.g. the task asks about "
+                    "expense amounts but no amount column exists), explicitly report this data/task mismatch "
+                    "and refuse to substitute analysis on unrelated columns."
+                ),
                 run_code_func=None,
                 path_info=path_info
             )
@@ -626,6 +636,14 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                     "请以要点形式清晰简洁地列出。"
                     "重点关注可操作的洞察和数据中的重要规律。"
                     "同时请列出你生成的关键交付产物（如图表、报告等），并简要说明其内容。\n\n"
+                    "重要：null finding 同样是合法且必须报告的发现。\n"
+                    "  - 如果任务问题预设了某种规律（如\"识别上升趋势\"、\"找出相关性\"、\"分析不均衡\"），"
+                    "但你的实际分析表明该规律不存在（无趋势、无显著相关、分布均衡），"
+                    "请明确写出\"未观察到 X\"，并附上支持该结论的证据（如统计量、相关系数、可视化结果），"
+                    "不要为了迎合问题而臆造模式。\n"
+                    "  - 如果数据集缺少任务所需的关键列/字段（如任务要求分析金额但无 amount 列），"
+                    "请将\"数据与任务不匹配（具体缺失字段：...）\"作为首要发现明确写出，"
+                    "不要用其他无关列替代分析。\n\n"
                     "总条数最多为15条。"
                     "输出格式示例：\n"
                     "1. 关键发现1：[具体发现内容]\n"
@@ -640,6 +658,15 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                     "and insights you discovered. List them clearly and concisely as bullet points. "
                     "Focus on actionable insights and important patterns in the data. "
                     "Also list the key deliverables you produced (e.g. charts, reports) with a brief description.\n\n"
+                    "IMPORTANT: null findings are valid and must be reported.\n"
+                    "  - If the task question presupposes a pattern (e.g. \"identify increasing trends\", "
+                    "\"find correlations\", \"analyze imbalance\") but your actual analysis shows the pattern "
+                    "does NOT exist (no trend / no significant correlation / balanced distribution), state "
+                    "\"X was not observed\" explicitly and back it up with statistics, coefficients, or "
+                    "visual evidence. Do not fabricate patterns to satisfy the question.\n"
+                    "  - If the dataset lacks columns or fields the task requires (e.g. the task asks about "
+                    "expense amounts but there is no amount column), report \"data/task mismatch (missing "
+                    "fields: ...)\" as the FIRST finding. Do not substitute analysis on unrelated columns.\n\n"
                     "Output format example:\n"
                     "1. Key Finding: [specific finding]\n"
                     "2. Important Pattern: [pattern description]\n"
@@ -652,7 +679,17 @@ def run_reference_models(query: str, data_description: str, config: Dict,
                 combined_query = hermes_query + "\n\n" + insight_extraction_prompt
                 fallback_result = agent.interact(
                     query=combined_query,
-                    system_prompt="You are an expert data analyst. Analyze the dataset thoroughly.",
+                    system_prompt=(
+                        "You are an expert data analyst. Analyze the dataset thoroughly and let the data speak. "
+                        "Do not assume the hypothesis or premise embedded in the question is correct. "
+                        "If the data does NOT support the question's premise (e.g. the question asks to identify "
+                        "an increasing trend / a correlation / an imbalance, but the data shows none), state the "
+                        "absence explicitly with evidence — null findings are valid and important answers, do not "
+                        "fabricate patterns to satisfy the question. "
+                        "If the dataset lacks the columns or fields the task requires (e.g. the task asks about "
+                        "expense amounts but no amount column exists), explicitly report this data/task mismatch "
+                        "and refuse to substitute analysis on unrelated columns."
+                    ),
                     run_code_func=None,
                     path_info=path_info
                 )
