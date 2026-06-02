@@ -92,6 +92,14 @@ CRITICAL rules for Layer 1:
    does not match the task (specify the missing fields)". Do NOT replace Layer 1 with criteria for
    the alternative analysis the models did on whatever columns happened to be present — that
    alternative belongs (at most) in Layer 3.
+3. KEEP DESCRIPTIONS GENERIC AND PATTERN-LEVEL. Each `description` must describe the pattern or
+   conclusion the analysis should reach, NOT the exact numeric values, dates, or named entities
+   from the consensus findings. For example, write "identifies a sustained increase in workload
+   for at least one specific agent" instead of "identifies that Charlie's tickets rose from 12
+   in May to 38 in October". The criterion should match any analysis that arrives at the same
+   pattern, even if it cites different numbers or different entity names. Numbers/entities may
+   appear at most as parenthetical hints (e.g. "(such as Charlie or Howard)"), never as required
+   matches.
 
 Format: List of dicts with 'criterion', 'description', 'points' (total should be 50)
 
@@ -156,6 +164,12 @@ Output JSON:
   （例如任务要求分析金额但无 amount 列），第一层的第一条必须是"正确识别数据与任务不匹配
    （需具体列出缺失字段）"。**禁止**用模型在其他可用列上做出的替代分析来填充第一层——
    那类替代分析最多放到第三层加分项。
+3. **description 必须保持模式级、通用化**。每条 description 应描述分析应当得出的"模式或结论"，
+   **不要**把共识发现里的具体数字、日期、人名、产品名硬编码进 description。
+   例如写"识别出至少一名特定坐席的工作量呈持续上升趋势"，而不是"识别出 Charlie 的工单从 5 月
+   12 件升到 10 月 38 件"。一条 criterion 应该能匹配任何得出相同模式的分析——哪怕该分析引用了
+   不同的数字或不同的人名。具体数字/人名最多作为括注提示（如"（例如 Charlie 或 Howard）"），
+   绝不作为必须命中的硬性匹配条件。
 
 格式：字典列表，包含 'criterion'（标准名称）、'description'（详细描述）、'points'（分值），总分应为 50 分。
 
@@ -197,38 +211,45 @@ Output JSON:
             else "You are an expert at designing evaluation rubrics for data analysis tasks."
         )
 
-        # Call LLM for rubric generation
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_msg,
-                },
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.0,
-        )
-
-        # Parse response
-        try:
+        # Call LLM for rubric generation, with retry on parse failure
+        max_attempts = 3
+        rubric = None
+        last_err = None
+        for attempt in range(max_attempts):
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_msg,
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+            )
             content = response.choices[0].message.content
             try:
                 rubric = json.loads(content)
+                break
             except json.JSONDecodeError:
                 match = re.search(r'```(?:json)?\s*(.*?)```', content, re.DOTALL)
                 if match:
-                    rubric = json.loads(match.group(1))
-                else:
-                    raise
-        except (json.JSONDecodeError, Exception) as e:
-            print(f"Warning: Failed to parse rubric generation result as JSON: {e}")
-            rubric = {
-                "layer1_must_find": [],
-                "layer2_process_quality": [],
-                "layer3_bonus_discovery": [],
-                "scoring_weights": {"layer1": 0.5, "layer2": 0.3, "layer3": 0.2},
-            }
+                    try:
+                        rubric = json.loads(match.group(1))
+                        break
+                    except json.JSONDecodeError as e:
+                        last_err = e
+                        print(f"  [rubric] attempt {attempt+1}/{max_attempts}: fenced JSON parse failed: {e}")
+                        continue
+                last_err = "no JSON object in response"
+                print(f"  [rubric] attempt {attempt+1}/{max_attempts}: no JSON object found in response")
+
+        if rubric is None or not rubric.get("layer1_must_find"):
+            # Surface the failure loudly instead of writing an empty rubric silently
+            raise RuntimeError(
+                f"Rubric generation failed after {max_attempts} attempts (last error: {last_err}). "
+                f"Caller should not write this empty rubric to cache."
+            )
 
         return rubric
 
