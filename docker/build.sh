@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 HERMES_IMAGE="${HERMES_IMAGE:-hermes-agent:latest}"
 EVAL_IMAGE="${EVAL_IMAGE:-hermes-eval:latest}"
 HERMES_REPO="${HERMES_REPO:-https://github.com/nousresearch/hermes-agent}"
-HERMES_REF="${HERMES_REF:-v2026.4.30}"
+HERMES_REF="${HERMES_REF:-v2026.5.16}"
 
 if ! docker image inspect "$HERMES_IMAGE" >/dev/null 2>&1; then
     workdir="$(mktemp -d)"
