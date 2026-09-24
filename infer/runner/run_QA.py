@@ -7,6 +7,7 @@ import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from infer.framework import InferenceRunner
+from infer.input_workspace import TaskInputWorkspace
 
 # Import agents individually so one missing dependency doesn't block the rest
 OpenAIJupyterAgent = None
@@ -152,21 +153,16 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
     
     # 4. Run Interaction Loop
     
+    input_workspace = None
     try:
-        path_info = {}
         mnt_dir_path='/mnt/data'
+        input_workspace = TaskInputWorkspace(real_file_path_list, str(task_id))
+        path_info = {**input_workspace.path_info(), 'task_id': str(task_id)}
         
         if real_file_path_list:
             file_paths_str = ", ".join([os.path.join(mnt_dir_path, os.path.basename(f)) for f in real_file_path_list])
             question = f"{question}\n\n 你所用到的文件在: {file_paths_str}"
-            first_file_dir = os.path.dirname(real_file_path_list[0])
-            path_info = {'real_input_dir': first_file_dir,
-                         'mnt_input_dir': mnt_dir_path,
-                         'task_id': str(task_id)}
-        else:
-            path_info = {'real_input_dir': agent.data_root_path,
-                         'mnt_input_dir': mnt_dir_path,
-                         'task_id': str(task_id)}
+            question += "\n输入目录 /mnt/data 为只读；临时文件请写入 /mnt/work。"
         
         if generated_files_path:
             # Create a specific directory for this task's generated files
@@ -188,6 +184,8 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
     finally:
         if toolkit:
             toolkit.reset_session()
+        if input_workspace:
+            input_workspace.cleanup()
 
 
 def run(args):
@@ -328,6 +326,7 @@ def run(args):
             data_root_path=agent_data_root,
             max_rounds=getattr(args, 'max_rounds', 20),
             enable_thinking=getattr(args, 'enable_thinking', None),
+            reasoning_effort=getattr(args, 'reasoning_effort', None),
             temperature=getattr(args, 'temperature', 0.0),
             top_p=getattr(args, 'top_p', 1.0)
         )

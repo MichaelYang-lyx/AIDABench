@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -75,22 +76,88 @@ class HermesDockerAgent:
     # Workspace helpers
     # ------------------------------------------------------------------
 
-    def _prepare_workspace(self, workspace_dir: Path, real_input_files: list[str]) -> Path:
-        """创建 workspace 目录并将输入文件复制进 inputs/ 子目录。"""
+    def _prepare_workspace(self, workspace_dir: Path) -> Path:
+        """创建容器的可写 workspace；输入通过单独的只读挂载提供。"""
         workspace_dir.mkdir(parents=True, exist_ok=True)
-        inputs_dir = workspace_dir / "inputs"
-        inputs_dir.mkdir(exist_ok=True)
-
-        for src in real_input_files:
-            src_path = Path(src)
-            if src_path.exists():
-                dst = inputs_dir / src_path.name
-                if dst.is_symlink():
-                    dst.unlink()
-                if not dst.exists() or dst.stat().st_size == 0:
-                    shutil.copy2(str(src_path), str(dst))
+        (workspace_dir / "outputs").mkdir(exist_ok=True)
+        (workspace_dir / "scratch").mkdir(exist_ok=True)
 
         return workspace_dir
+
+    @staticmethod
+    def _prepare_input_mount(
+        path_info: Dict[str, Any],
+    ) -> tuple[Path, Optional[tempfile.TemporaryDirectory]]:
+        """Resolve only declared inputs into a directory safe to mount read-only.
+
+        A runner-created isolated directory can be mounted directly.  Legacy
+        callers are staged into a fresh directory from ``real_input_files``;
+        ``real_input_dir`` is intentionally never scanned as a fallback.
+        """
+        raw_files = path_info.get("real_input_files") or []
+        declared_files: list[Path] = []
+        names: set[str] = set()
+        for raw_path in raw_files:
+            unresolved_source = Path(raw_path).expanduser()
+            if unresolved_source.is_symlink():
+                raise ValueError(f"declared input must not be a symlink: {unresolved_source}")
+            source = unresolved_source.resolve(strict=True)
+            if not source.is_file():
+                raise ValueError(f"declared input must be a regular file: {source}")
+            if source.name in names:
+                raise ValueError(f"declared inputs have duplicate basename: {source.name}")
+            names.add(source.name)
+            declared_files.append(source)
+
+        if path_info.get("input_dir_isolated"):
+            raw_input_dir = path_info.get("real_input_dir")
+            if not raw_input_dir:
+                raise ValueError("isolated input directory is missing real_input_dir")
+            unresolved_input_dir = Path(raw_input_dir).expanduser()
+            if unresolved_input_dir.is_symlink():
+                raise ValueError(
+                    f"isolated input path must not be a symlink: {unresolved_input_dir}"
+                )
+            input_dir = unresolved_input_dir.resolve(strict=True)
+            if not input_dir.is_dir():
+                raise ValueError(f"isolated input path must be a directory: {input_dir}")
+            for source in declared_files:
+                if source.parent != input_dir:
+                    raise ValueError(
+                        f"declared input is outside isolated directory: {source}"
+                    )
+            return input_dir, None
+
+        staging = tempfile.TemporaryDirectory(prefix="aida_hermes_inputs_")
+        input_dir = Path(staging.name)
+        try:
+            for source in declared_files:
+                destination = input_dir / source.name
+                shutil.copy2(source, destination)
+                destination.chmod(0o444)
+            input_dir.chmod(0o555)
+        except Exception:
+            input_dir.chmod(0o700)
+            staging.cleanup()
+            raise
+        return input_dir, staging
+
+    @staticmethod
+    def _collect_generated_outputs(
+        workspace_dir: Path,
+        real_output_dir: str,
+    ) -> None:
+        """将容器在 workspace/outputs 下生成的文件回收到 runner 输出目录。"""
+        source_dir = workspace_dir / "outputs"
+        if not source_dir.is_dir():
+            return
+
+        destination_dir = Path(real_output_dir)
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        if source_dir.resolve() == destination_dir.resolve():
+            return
+
+        shutil.copytree(source_dir, destination_dir, dirs_exist_ok=True)
 
     # ------------------------------------------------------------------
     # Docker helpers
@@ -111,6 +178,8 @@ class HermesDockerAgent:
         output_host: Path,
         task_id: str,
         prefill_messages: Optional[list] = None,
+        input_host: Optional[Path] = None,
+        scratch_host: Optional[Path] = None,
     ) -> dict:
         """启动 hermes-eval 容器执行单次任务，返回 result / meta 解析结果。"""
         container_name = f"hermes-eval-{re.sub(r'[^a-z0-9-]', '-', task_id.lower())[:48]}-{uuid.uuid4().hex[:6]}"
@@ -124,6 +193,11 @@ class HermesDockerAgent:
                     f.write(json.dumps(m, ensure_ascii=False, default=str) + "\n")
             prefill_container_path = "/workspace/.hermes_prefill.jsonl"
 
+        input_host = input_host or workspace_host / "inputs"
+        scratch_host = scratch_host or workspace_host / "scratch"
+        input_host.mkdir(parents=True, exist_ok=True)
+        scratch_host.mkdir(parents=True, exist_ok=True)
+
         docker_cmd = [
             "docker", "run", "--rm",
             "--name", container_name,
@@ -132,6 +206,8 @@ class HermesDockerAgent:
             "-e", f"HERMES_GID={os.getgid()}",
             # 卷挂载
             "-v", f"{workspace_host.resolve()}:/workspace",
+            "-v", f"{input_host.resolve()}:/workspace/inputs:ro",
+            "-v", f"{scratch_host.resolve()}:/workspace/scratch",
             "-v", f"{output_host.resolve()}:/eval_output",
             # 任务参数
             "-e", f"HERMES_PROMPT={prompt}",
@@ -232,8 +308,6 @@ class HermesDockerAgent:
                 "Build it first: cd hermes-auto && bash docker/build.sh"
             )
 
-        real_input_dir = path_info.get("real_input_dir", self.data_root_path)
-
         # 确定 task_id
         task_id = path_info.get("task_id")
         if not task_id and path_info.get("workspace_dir"):
@@ -247,14 +321,12 @@ class HermesDockerAgent:
         else:
             workspace_dir = DEFAULT_WORKSPACE_DIR / self.save_name / str(task_id)
 
-        # 收集输入文件
-        real_input_files = []
-        if real_input_dir and os.path.isdir(real_input_dir):
-            real_input_files = [
-                str(p) for p in Path(real_input_dir).iterdir() if p.is_file()
-            ]
-
-        work_dir = self._prepare_workspace(workspace_dir, real_input_files)
+        work_dir = self._prepare_workspace(workspace_dir)
+        input_host, input_staging = self._prepare_input_mount(path_info)
+        scratch_host = Path(
+            path_info.get("real_work_dir") or work_dir / "scratch"
+        ).expanduser().resolve()
+        scratch_host.mkdir(parents=True, exist_ok=True)
 
         # 替换虚拟路径为容器内路径（容器 cwd=/workspace）
         docker_query = query
@@ -264,18 +336,43 @@ class HermesDockerAgent:
         docker_query = docker_query.replace(
             path_info.get("mnt_output_dir", "/mnt/result"), "/workspace/outputs"
         )
+        docker_query = docker_query.replace(
+            path_info.get("mnt_work_dir", "/mnt/work"), "/workspace/scratch"
+        )
         docker_query = docker_query.replace("/mnt/output", "/workspace/outputs")
 
         # eval_output 目录（容器产出落到 workspace 旁边的 _eval_output 子目录）
         run_id = uuid.uuid4().hex[:6]
         output_host = workspace_dir.parent / f"{workspace_dir.name}_eval_{run_id}"
 
-        container_result = self._run_container(
-            prompt=docker_query,
-            workspace_host=work_dir,
-            output_host=output_host,
-            task_id=task_id,
-        )
+        try:
+            container_result = self._run_container(
+                prompt=docker_query,
+                workspace_host=work_dir,
+                output_host=output_host,
+                task_id=task_id,
+                input_host=input_host,
+                scratch_host=scratch_host,
+            )
+        finally:
+            if input_staging is not None:
+                input_host.chmod(0o700)
+                input_staging.cleanup()
+
+        # 其他 agent 会把 /mnt/result 直接映射到 real_output_dir；Docker
+        # 版本先写入 /workspace/outputs，因此容器退出后需要显式回收产物。
+        real_output_dir = path_info.get("real_output_dir")
+        output_copy_error: Optional[str] = None
+        if real_output_dir:
+            try:
+                self._collect_generated_outputs(work_dir, real_output_dir)
+            except Exception as e:
+                output_copy_error = str(e)
+                logger.exception(
+                    "[%s] failed to collect generated outputs into %s",
+                    task_id,
+                    real_output_dir,
+                )
 
         result = container_result["result"]
         meta = container_result["meta"]
@@ -316,6 +413,8 @@ class HermesDockerAgent:
             "output_dir": container_result["output_dir"],
             "container_log": container_result["log_path"],
             "container_error": container_result["container_error"],
+            "generated_output_dir": str(Path(real_output_dir).resolve()) if real_output_dir else None,
+            "output_copy_error": output_copy_error,
             "meta": meta,
         }
 

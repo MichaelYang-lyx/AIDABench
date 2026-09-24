@@ -18,6 +18,15 @@ def process_single_row(row, i, args, evaluator):
     # Ensure answer field is present (map model_response to answer if needed)
     if 'answer' not in row and 'model_response' in row:
         row['answer'] = row['model_response']
+
+    if str(row.get('model_response') or '').strip() in (
+        'Error: Too many rounds reached.',
+        'Error: Model returned no usable final response after recovery attempts.',
+    ):
+        row['score'] = 0
+        row['reason'] = 'No usable final answer from model'
+        save_result(row, args, i)
+        return row
     
     # Evaluate
     try:

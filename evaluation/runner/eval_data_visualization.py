@@ -95,8 +95,9 @@ def process_single_row(row, i, args, evaluator):
     for key in visual_keys:
         if key in visual_res:
             try:
-                # Ensure value is numeric (0 or 1)
-                val = int(visual_res[key])
+                # Preserve fractional judge scores (for example 0.5). Casting
+                # to int silently turned every such score into zero.
+                val = float(visual_res[key])
                 total_visual_score += val
                 valid_visual_items += 1
             except:

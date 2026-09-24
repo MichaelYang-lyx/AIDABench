@@ -1,8 +1,10 @@
 import json
 import os
 import concurrent.futures
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Any
 from tqdm import tqdm
+from infer.failure_policy import is_retryable_api_failure
 
 class InferenceRunner:
     def __init__(self, num_workers: int = 4, id_field: str = "id"):
@@ -42,6 +44,27 @@ class InferenceRunner:
                         except json.JSONDecodeError:
                             continue
         return processed_ids
+
+    def _write_retryable_failure(self, result: Dict, output_path: str) -> str:
+        """Persist a retryable result without making it an inference checkpoint.
+
+        ``conv/<ID>.json`` controls resume behavior, so failed results must not
+        be written there.  Keep every failed attempt in the sibling
+        ``failed_traces/<ID>.jsonl`` instead; the next inference run will still
+        pick up the task while its full history remains available for diagnosis.
+        """
+        item_id = str(result.get(self.id_field, "unknown"))
+        trace_dir = os.path.join(
+            os.path.dirname(os.path.abspath(output_path)), "failed_traces"
+        )
+        os.makedirs(trace_dir, exist_ok=True)
+        trace_path = os.path.join(trace_dir, f"{item_id}.jsonl")
+
+        record = dict(result)
+        record["_failure_recorded_at"] = datetime.now(timezone.utc).isoformat()
+        with open(trace_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return trace_path
 
     def run(self, 
             data_path: str, 
@@ -98,6 +121,17 @@ class InferenceRunner:
                 for future in tqdm(concurrent.futures.as_completed(future_to_item), total=len(tasks_to_run)):
                     result = future.result()
                     if result:
+                        if result.get("_retryable_failure") and is_retryable_api_failure(result.get("model_response")):
+                            item_id = result.get(self.id_field, "unknown")
+                            trace_path = self._write_retryable_failure(result, output_path)
+                            print(
+                                f"Retryable inference failure for {item_id}; "
+                                f"checkpoint not written, trace saved to {trace_path}."
+                            )
+                            continue
+                        # An old agent may still mark a terminal model outcome
+                        # retryable. The checkpoint should reflect its final status.
+                        result.pop("_retryable_failure", None)
                         if is_directory_mode:
                             # Save to individual file: output_path/{id}.json
                             item_id = result.get(self.id_field, "unknown")

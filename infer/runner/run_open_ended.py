@@ -315,6 +315,7 @@ def run(args):
             data_root_path=agent_data_root,
             max_rounds=getattr(args, 'max_rounds', 20),
             enable_thinking=getattr(args, 'enable_thinking', None),
+            reasoning_effort=getattr(args, 'reasoning_effort', None),
             temperature=getattr(args, 'temperature', 0.0),
             top_p=getattr(args, 'top_p', 1.0)
         )

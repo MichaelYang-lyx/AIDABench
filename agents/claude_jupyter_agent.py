@@ -19,6 +19,8 @@ class LLMResponse:
     """Response from the LLM."""
     think_text: Optional[str]
     content: Optional[str]
+    content_blocks: List[Dict[str, Any]] = field(default_factory=list)
+    reasoning_blocks: List[Dict[str, Any]] = field(default_factory=list)
     tool_calls: List[ToolCall] = field(default_factory=list)
     finish_reason: str = "stop"
     usage: Dict[str, int] = field(default_factory=dict)
@@ -29,23 +31,40 @@ class LLMResponse:
         return len(self.tool_calls) > 0
 
 
+def _serialize_content_block(block: Any) -> Dict[str, Any]:
+    """Preserve signed thinking blocks for the following Anthropic tool turn."""
+    if isinstance(block, dict):
+        return dict(block)
+    if hasattr(block, "model_dump"):
+        return block.model_dump(mode="json", exclude_none=True)
+    return {"type": getattr(block, "type", "unknown")}
+
+
 def parse_response(response) -> LLMResponse:
-        """Parse the Anthropic API response into LLMResponse."""
+        """Parse an Anthropic response without dropping signed thinking data."""
         content_text = ""
         think_text = ""
+        content_blocks = []
+        reasoning_blocks = []
         tool_calls = []
 
         for block in response.content:
-            if block.type == "text":
-                content_text += block.text
-            if block.type == "thinking":
-                think_text += block.thinking
-
-            elif block.type == "tool_use":
+            serialized_block = _serialize_content_block(block)
+            content_blocks.append(serialized_block)
+            block_type = serialized_block.get("type")
+            if block_type == "text":
+                content_text += serialized_block.get("text", "")
+            elif block_type == "thinking":
+                think_text += serialized_block.get("thinking", "")
+                reasoning_blocks.append(serialized_block)
+            elif block_type == "redacted_thinking":
+                reasoning_blocks.append(serialized_block)
+            elif block_type == "tool_use":
+                arguments = serialized_block.get("input", {})
                 tool_calls.append(ToolCall(
-                    id=block.id,
-                    name=block.name,
-                    arguments=block.input if isinstance(block.input, dict) else {}
+                    id=serialized_block.get("id", ""),
+                    name=serialized_block.get("name", ""),
+                    arguments=arguments if isinstance(arguments, dict) else {},
                 ))
 
         # Determine finish reason
@@ -66,6 +85,8 @@ def parse_response(response) -> LLMResponse:
         return LLMResponse(
             think_text=think_text if think_text else None,
             content=content_text if content_text else None,
+            content_blocks=content_blocks,
+            reasoning_blocks=reasoning_blocks,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=usage
@@ -91,11 +112,14 @@ except ImportError:
         extract_workbook_summary3b = None
 
 class ClaudeJupyterAgent:
-    def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str, max_rounds: int = 20):
+    def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str, max_rounds: int = 20, enable_thinking: str = "adaptive", **kwargs):
+        if enable_thinking != "adaptive":
+            raise ValueError("ClaudeJupyterAgent requires enable_thinking='adaptive'")
         self.client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=300.0)
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.max_rounds = max_rounds
+        self.thinking = {"type": "adaptive"}
 
         # Define the tools (Anthropic format)
         self.tools = [
@@ -117,21 +141,25 @@ class ClaudeJupyterAgent:
         try:
             if has_system:
                 system_msg = messages[0].get("content")
-                raw_response = self.client.messages.create(
+                raw_response = self.client.beta.messages.create(
                     model=self.model_name,
+                    cache_control={"type": "ephemeral"},
                     system=system_msg,
                     messages=messages[1:],
                     max_tokens=16000,
                     temperature=1,
+                    thinking=self.thinking,
                     tools=self.tools,
                     tool_choice={"type": "auto"},
                 )
             else:
-                raw_response = self.client.messages.create(
+                raw_response = self.client.beta.messages.create(
                     model=self.model_name,
+                    cache_control={"type": "ephemeral"},
                     messages=messages,
                     max_tokens=16000,
                     temperature=1,
+                    thinking=self.thinking,
                     tools=self.tools,
                     tool_choice={"type": "auto"},
                 )
@@ -153,6 +181,7 @@ class ClaudeJupyterAgent:
         round_count = 0
         all_tokens = 0
         final_response = ""
+        retryable_failure = False
 
         # Interaction Loop
         while True:
@@ -167,37 +196,17 @@ class ClaudeJupyterAgent:
                 all_tokens += completion_tokens
             except Exception as e:
                 final_response = f"Error during API call: {e}"
+                retryable_failure = True
                 break
 
             # Check for tool calls
             tool_calls = generated_message.tool_calls
 
             if tool_calls:
-                # Add assistant message with tool calls to history
-                assistant_content = []
-                generated_text = generated_message.content
-                if generated_text:
-                    assistant_content.append({
-                        "type": "text",
-                        "text": generated_text
-                    })
-                else:
-                    assistant_content.append({
-                        "type": "text",
-                        "text": "call_tools"
-                    })
-
-                for tool_call in tool_calls:
-                    assistant_content.append({
-                        "type": "tool_use",
-                        "id": tool_call.id,
-                        "name": tool_call.name,
-                        "input": tool_call.arguments  # already a dict from parse_response
-                    })
-
+                # Adaptive thinking signatures must be passed back byte-for-byte.
                 input_message.append({
                     "role": "assistant",
-                    "content": assistant_content
+                    "content": generated_message.content_blocks
                 })
 
                 # Process each tool call and collect results into ONE user message
@@ -275,7 +284,7 @@ class ClaudeJupyterAgent:
                     final_response = "Empty response from model."
                 break
 
-        return {
+        result = {
             "model_response": final_response,
             "history": [
                 msg.model_dump() if hasattr(msg, 'model_dump') else msg
@@ -284,3 +293,6 @@ class ClaudeJupyterAgent:
             "total_tokens": all_tokens,
             "rounds": round_count
         }
+        if retryable_failure:
+            result["_retryable_failure"] = True
+        return result

@@ -9,6 +9,49 @@ from typing import Any, Dict, List, Optional
 from openai import OpenAI
 from toolkits import CodeExecutionToolkit
 
+
+def parse_evaluation_response(model_response: str) -> Optional[Dict[str, Any]]:
+    """Extract a file-judge verdict, including from malformed fenced JSON.
+
+    Judges occasionally put explanatory text before the JSON or include
+    unescaped quotes in the ``reason`` value. In the latter case the JSON is
+    invalid, but the requested boolean verdict is still explicit and safe to
+    recover.
+    """
+    import re
+
+    candidates = [model_response]
+    candidates.extend(
+        match.group(1).strip()
+        for match in re.finditer(
+            r"```(?:json)?\s*(.*?)```", model_response, re.IGNORECASE | re.DOTALL
+        )
+    )
+    candidates.extend(
+        match.group(0)
+        for match in re.finditer(r"\{[^{}]*\}", model_response, re.DOTALL)
+    )
+
+    for candidate in reversed(candidates):
+        try:
+            parsed = json.loads(candidate)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict) and {"is_correct", "reason"} <= parsed.keys():
+            return parsed
+
+    verdicts = re.findall(
+        r'["\']?is_correct["\']?\s*:\s*(true|false)',
+        model_response,
+        re.IGNORECASE,
+    )
+    if verdicts:
+        return {
+            "is_correct": verdicts[-1].lower() == "true",
+            "reason": model_response,
+        }
+    return None
+
 class FileEvaluatorAgent:
     def __init__(self, api_key: str, base_url: str, model_name: str, max_rounds: int = 30):
         self.api_key = api_key
@@ -35,12 +78,18 @@ class FileEvaluatorAgent:
 
         # Initialize the agent
         # We use a dummy data_root_path as we provide absolute paths for files
+        normalized_model_name = self.model_name.lower().replace(".", "-").replace("_", "-")
+        thinking_config = None
+        if "4-6" in normalized_model_name:
+            thinking_config = {"type": "adaptive", "display": "summarized"}
+
         agent = ClaudeSubprocessAgent(
             api_key=self.api_key,
             base_url=self.base_url,
             model_name=self.model_name,
             data_root_path="/tmp",
-            max_rounds=self.max_rounds
+            max_rounds=self.max_rounds,
+            thinking=thinking_config,
         )
         
         # Initialize toolkit for this evaluation session
@@ -137,26 +186,10 @@ class FileEvaluatorAgent:
             model_response = result.get("model_response", "")
             history = result.get("history", [])
             
-            # Extract JSON from response
-            try:
-                # Try to find JSON block using regex
-                import re
-                json_match = re.search(r"\{.*\}", model_response, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(0)
-                    eval_result = json.loads(json_str)
-                    if "is_correct" in eval_result and "reason" in eval_result:
-                        eval_result["eval_history"] = history
-                        return eval_result
-                
-                # If the whole response is JSON
-                eval_result = json.loads(model_response)
-                if "is_correct" in eval_result and "reason" in eval_result:
-                    eval_result["eval_history"] = history
-                    return eval_result
-                    
-            except Exception:
-                pass
+            eval_result = parse_evaluation_response(model_response)
+            if eval_result is not None:
+                eval_result["eval_history"] = history
+                return eval_result
                 
             return {
                 "is_correct": False, 

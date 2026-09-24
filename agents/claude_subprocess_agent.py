@@ -1,11 +1,7 @@
 import os
 import sys
-import json
-import ast
-from typing import Dict, Any, List, Union
-from openai import OpenAI
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 import anthropic
 
 @dataclass
@@ -20,6 +16,8 @@ class LLMResponse:
     """Response from the LLM."""
     think_text: Optional[str]
     content: Optional[str]
+    content_blocks: List[Dict[str, Any]] = field(default_factory=list)
+    reasoning_blocks: List[Dict[str, Any]] = field(default_factory=list)
     tool_calls: List[ToolCall] = field(default_factory=list)
     finish_reason: str = "stop"
     usage: Dict[str, int] = field(default_factory=dict)
@@ -30,47 +28,75 @@ class LLMResponse:
         return len(self.tool_calls) > 0
 
 
-def parse_response(response) -> LLMResponse:
-        """Parse the Anthropic API response into LLMResponse."""
-        content_text = ""
-        think_text = ""
-        tool_calls = []
-        
-        for block in response.content:
-            if block.type == "text":
-                content_text += block.text
-            if block.type == "thinking":
-                think_text += block.thinking
+def _serialize_content_block(block: Any) -> Dict[str, Any]:
+    """Serialize an Anthropic content block without dropping signed thinking data."""
+    if isinstance(block, dict):
+        return dict(block)
+    if hasattr(block, "model_dump"):
+        return block.model_dump(mode="json", exclude_none=True)
 
-            elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.id,
-                    name=block.name,
-                    arguments=block.input if isinstance(block.input, dict) else {}
-                ))
-        
-        # Determine finish reason
-        finish_reason = "stop"
-        if response.stop_reason == "tool_use":
-            finish_reason = "tool_calls"
-        elif response.stop_reason == "end_turn":
-            finish_reason = "stop"
-        
-        usage = {}
-        if response.usage:
-            usage = {
-                "prompt_tokens": response.usage.input_tokens,
-                "completion_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.input_tokens + response.usage.output_tokens
-            }
-        
-        return LLMResponse(
-            think_text=think_text if think_text else None,
-            content=content_text if content_text else None,
-            tool_calls=tool_calls,
-            finish_reason=finish_reason,
-            usage=usage
-        )
+    # Kept as a fallback for compatible gateways returning simple objects.
+    block_type = getattr(block, "type", None)
+    field_names = {
+        "text": ("type", "text"),
+        "thinking": ("type", "thinking", "signature"),
+        "redacted_thinking": ("type", "data"),
+        "tool_use": ("type", "id", "name", "input"),
+    }.get(block_type, ("type",))
+    return {
+        field_name: getattr(block, field_name)
+        for field_name in field_names
+        if hasattr(block, field_name)
+    }
+
+
+def parse_response(response) -> LLMResponse:
+    """Parse an Anthropic response while preserving content block order and signatures."""
+    content_text = ""
+    think_text = ""
+    content_blocks = []
+    reasoning_blocks = []
+    tool_calls = []
+
+    for block in response.content:
+        serialized_block = _serialize_content_block(block)
+        content_blocks.append(serialized_block)
+        block_type = serialized_block.get("type", getattr(block, "type", None))
+
+        if block_type == "text":
+            content_text += serialized_block.get("text", "")
+        elif block_type == "thinking":
+            think_text += serialized_block.get("thinking", "")
+            reasoning_blocks.append(serialized_block)
+        elif block_type == "redacted_thinking":
+            reasoning_blocks.append(serialized_block)
+        elif block_type == "tool_use":
+            arguments = serialized_block.get("input", {})
+            tool_calls.append(ToolCall(
+                id=serialized_block.get("id", ""),
+                name=serialized_block.get("name", ""),
+                arguments=arguments if isinstance(arguments, dict) else {},
+            ))
+
+    finish_reason = "tool_calls" if response.stop_reason == "tool_use" else "stop"
+
+    usage = {}
+    if response.usage:
+        usage = {
+            "prompt_tokens": response.usage.input_tokens,
+            "completion_tokens": response.usage.output_tokens,
+            "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+        }
+
+    return LLMResponse(
+        think_text=think_text if think_text else None,
+        content=content_text if content_text else None,
+        content_blocks=content_blocks,
+        reasoning_blocks=reasoning_blocks,
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
+        usage=usage,
+    )
 
 # Try imports, assuming the project root is in PYTHONPATH or handled by the runner
 try:
@@ -92,11 +118,20 @@ except ImportError:
         extract_workbook_summary3b = None
 
 class ClaudeSubprocessAgent:
-    def __init__(self, api_key: str, base_url: str, model_name: str, data_root_path: str, max_rounds: int = 20):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model_name: str,
+        data_root_path: str,
+        max_rounds: int = 20,
+        thinking: Optional[Dict[str, Any]] = None,
+    ):
         self.client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
         self.model_name = model_name
         self.data_root_path = data_root_path
         self.max_rounds = max_rounds
+        self.thinking = thinking
         
         # Define the tools (OpenAI format)
         self.tools = [
@@ -116,27 +151,33 @@ class ClaudeSubprocessAgent:
     def _get_response_openai(self, messages: List[Dict]):
         has_system = bool(messages) and messages[0].get("role") == "system"
         try:
+            request_kwargs = {
+                "model": self.model_name,
+                "max_tokens": 16000,
+                "temperature": 1,
+                "tools": self.tools,
+                "tool_choice": {"type": "auto"},
+            }
+            if self.thinking is not None:
+                request_kwargs["thinking"] = self.thinking
+
             if has_system:
                 system_msg = messages[0].get("content")
+                request_messages = list(messages[1:])
+                if request_messages and request_messages[0].get("role") == "user":
+                    request_messages[0] = dict(request_messages[0])
+                    request_messages[0]["content"] = f"{system_msg}\n\n{request_messages[0].get('content', '')}"
+                else:
+                    request_messages.insert(0, {"role": "user", "content": system_msg})
             
-                raw_response= self.client.messages.create(
-                    model=self.model_name,  
-                    system=system_msg,
-                    messages=messages[1:],  
-                    max_tokens=16000,
-                    temperature=1,
-                    tools=self.tools,
-                    tool_choice={"type": "auto"},
+                raw_response = self.client.messages.create(
+                    messages=request_messages,
+                    **request_kwargs,
                 )
-                
             else:
-                raw_response= self.client.messages.create(
-                    model=self.model_name,  
-                    messages=messages,  
-                    max_tokens=16000,
-                    temperature=1,
-                    tools=self.tools,
-                    tool_choice={"type": "auto"},
+                raw_response = self.client.messages.create(
+                    messages=messages,
+                    **request_kwargs,
                 )
             response = parse_response(raw_response)
             return response, response.usage['completion_tokens']
@@ -156,6 +197,7 @@ class ClaudeSubprocessAgent:
         round_count = 0
         all_tokens = 0
         final_response = ""
+        reasoning_blocks = []
         
         # Interaction Loop
         while True:
@@ -166,8 +208,8 @@ class ClaudeSubprocessAgent:
             
             try:
                 generated_message, completion_tokens = self._get_response_openai(input_message)
-                
                 all_tokens += completion_tokens
+                reasoning_blocks.extend(generated_message.reasoning_blocks)
             except Exception as e:
                 final_response = f"Error during API call: {e}"
                 break
@@ -176,27 +218,9 @@ class ClaudeSubprocessAgent:
             tool_calls = generated_message.tool_calls
             
             if tool_calls:
-                # Add assistant message with tool calls to history
-                assistant_content = []
-                generated_text = generated_message.content
-                if generated_text:
-                    assistant_content.append({
-                        "type": "text",
-                        "text": generated_text
-                    })
-                else:
-                    assistant_content.append({
-                        "type": "text",
-                        "text": "call_tools"
-                    })
-                
-                for tool_call in tool_calls:
-                    assistant_content.append({
-                        "type": "tool_use",
-                        "id": tool_call.id,
-                        "name": tool_call.name,
-                        "input": tool_call.arguments  # already a dict from parse_response
-                    })
+                # Signed thinking blocks must be passed back byte-for-byte with the
+                # rest of the assistant content on the following tool round.
+                assistant_content = generated_message.content_blocks
 
                 input_message.append({
                     "role": "assistant",
@@ -274,8 +298,17 @@ class ClaudeSubprocessAgent:
                 # No tool calls -> Final Answer
                 final_text = generated_message.content
                 if final_text:
-                    input_message.append({"role": "assistant", "content": final_text})
+                    input_message.append({
+                        "role": "assistant",
+                        "content": generated_message.content_blocks,
+                    })
                     final_response = final_text
+                elif generated_message.content_blocks:
+                    input_message.append({
+                        "role": "assistant",
+                        "content": generated_message.content_blocks,
+                    })
+                    final_response = "Empty response from model."
                 else:
                     final_response = "Empty response from model."
                 break
@@ -286,6 +319,7 @@ class ClaudeSubprocessAgent:
                 msg.model_dump() if hasattr(msg, 'model_dump') else msg 
                 for msg in input_message
             ],
+            "reasoning_blocks": reasoning_blocks,
             "total_tokens": all_tokens,
             "rounds": round_count
         }

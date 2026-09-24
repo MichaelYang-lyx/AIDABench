@@ -3,6 +3,8 @@ import subprocess
 import sys
 import os
 import json
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure project root is in sys.path so we can import 'infer' as a package
@@ -10,6 +12,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+from infer.failure_policy import is_retryable_api_failure
 
 def get_sys_msg(sys_msg_path, task):
     p = Path(sys_msg_path).expanduser()
@@ -21,11 +25,8 @@ def get_sys_msg(sys_msg_path, task):
 
 def check_and_clean_failed_preds(output_dir):
     """
-    Check all json files in output_dir (inference results).
-    If 'model_response' contains '502 Bad Gateway' or 'Error code: 503', delete the file.
-    Also check corresponding evaluation files and delete them if inference is bad.
-    Additionally, check evaluation files for the same errors in 'reason'/'correctness',
-    and if found, delete both eval and inference files.
+    Archive API/service failures so they can run again. Keep terminal model
+    outcomes as checkpoints and restore legacy terminal traces for evaluation.
     """
     if not os.path.exists(output_dir):
         return
@@ -40,8 +41,8 @@ def check_and_clean_failed_preds(output_dir):
     if eval_dir and os.path.exists(eval_dir):
         print(f"Also checking corresponding eval files in {eval_dir}...")
 
-    error_patterns = ["Request timed out","ClaudeSubprocessAgent","claude_subprocess_agent.py","Error code: 429","502 Bad Gateway", "Error code: 503", "engine is currently overloaded", "Too many API failures","Error during API call"]
-    
+    # Only transport/service failures should lose their checkpoint. Model-side
+    # failures (including round limits and empty final answers) are evaluated.
     files_to_delete_conv = set()
     files_to_delete_eval = set()
 
@@ -55,11 +56,9 @@ def check_and_clean_failed_preds(output_dir):
                         data = json.load(f)
                     
                     model_response = str(data.get("model_response", ""))
-                    has_error = any(err in model_response for err in error_patterns)
-                    is_empty = not model_response.strip()
-                    if has_error or is_empty:
-                        reason = "Error in model_response" if has_error else "empty model_response"
-                        print(f"Found failed inference ({reason}): {filename}")
+                    has_error = is_retryable_api_failure(model_response)
+                    if has_error:
+                        print(f"Found retryable inference (API/service error): {filename}")
                         files_to_delete_conv.add(filename)
                         files_to_delete_eval.add(filename)
                 except Exception:
@@ -95,7 +94,7 @@ def check_and_clean_failed_preds(output_dir):
                             fields_to_check.append(str(vis.get("reason", "")))
 
 
-                        if any(any(err in field for err in error_patterns) for field in fields_to_check):
+                        if any(is_retryable_api_failure(field) for field in fields_to_check):
                             print(f"Found failed eval (Error in reason/correctness): {filename}")
                             files_to_delete_eval.add(filename)
                             # If eval failed, we only delete eval file to let it re-run.
@@ -106,12 +105,25 @@ def check_and_clean_failed_preds(output_dir):
         except OSError:
             pass
 
-    # 3. Perform Deletion
+    # 3. Archive failed inference traces, then remove their checkpoints so
+    # they can resume on the next inference run. A failed conv JSON must not
+    # remain in place because its presence marks the task as processed.
+    failed_trace_dir = os.path.join(os.path.dirname(output_dir), "failed_traces")
+
     count_conv = 0
     for fname in files_to_delete_conv:
         p = os.path.join(output_dir, fname)
         if os.path.exists(p):
             try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    record = json.load(f)
+                record['_failure_archived_at'] = datetime.now(timezone.utc).isoformat()
+                os.makedirs(failed_trace_dir, exist_ok=True)
+                trace_path = os.path.join(failed_trace_dir, f"{fname[:-5]}.jsonl")
+                with open(trace_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                print(f"Archived failed inference trace: {trace_path}")
+
                 os.remove(p)
                 count_conv += 1
                 print(f"Deleted inference file: {p}")
@@ -139,6 +151,91 @@ def check_and_clean_failed_preds(output_dir):
 
     if count_conv > 0 or count_eval > 0:
         print(f"Cleanup finished. Removed {count_conv} inference files and {count_eval} eval files.")
+
+    _restore_terminal_results(output_dir, eval_dir, failed_trace_dir)
+
+
+def _restore_terminal_results(output_dir, eval_dir, failed_trace_dir):
+    """Restore only the latest terminal attempt from legacy retry archives."""
+    candidates = {}
+
+    def consider(item_id, record, happened_at, artifact_root=None):
+        if not isinstance(record, dict) or str(record.get("id")) != item_id:
+            return
+        if item_id not in candidates or happened_at > candidates[item_id][0]:
+            candidates[item_id] = (happened_at, record, artifact_root)
+
+    if os.path.isdir(failed_trace_dir):
+        for filename in os.listdir(failed_trace_dir):
+            if not filename.endswith(".jsonl"):
+                continue
+            trace_path = os.path.join(failed_trace_dir, filename)
+            try:
+                last_record = None
+                with open(trace_path, encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            last_record = json.loads(line)
+                timestamp = (last_record or {}).get("_failure_recorded_at") or (last_record or {}).get("_failure_archived_at")
+                happened_at = datetime.fromisoformat(timestamp) if timestamp else datetime.fromtimestamp(os.path.getmtime(trace_path), timezone.utc)
+                consider(filename[:-6], last_record, happened_at)
+            except (OSError, ValueError, TypeError, AttributeError) as e:
+                print(f"Could not read failed trace {trace_path}: {e}")
+
+    conv_path = Path(output_dir).resolve()
+    if conv_path.name == "conv" and conv_path.parents[2].name == "preds":
+        quarantine_root = conv_path.parents[2].parent / "retry_quarantine"
+        model_name = conv_path.parents[1].name
+        dataset_name = conv_path.parent.name
+        if quarantine_root.is_dir():
+            for stamp_dir in quarantine_root.iterdir():
+                archived_conv = stamp_dir / model_name / dataset_name / "conv"
+                if not archived_conv.is_dir():
+                    continue
+                try:
+                    happened_at = datetime.strptime(stamp_dir.name, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                for archived_path in archived_conv.glob("*.json"):
+                    try:
+                        with open(archived_path, encoding="utf-8") as f:
+                            record = json.load(f)
+                        consider(archived_path.stem, record, happened_at, archived_conv.parent / "artifacts")
+                    except (OSError, ValueError, TypeError) as e:
+                        print(f"Could not read quarantined result {archived_path}: {e}")
+
+    for item_id, (_, record, artifact_root) in candidates.items():
+        checkpoint_path = conv_path / f"{item_id}.json"
+        if checkpoint_path.exists():
+            continue
+        response = str(record.get("model_response", "")).strip()
+        if response not in (
+            "Error: Too many rounds reached.",
+            "Error: Model returned no usable final response after recovery attempts.",
+        ):
+            continue
+        restored = dict(record)
+        restored.pop("_retryable_failure", None)
+        restored.pop("_failure_recorded_at", None)
+        restored.pop("_failure_archived_at", None)
+        try:
+            if artifact_root:
+                for kind in ("pictures", "generated_files"):
+                    source = artifact_root / kind / item_id
+                    target = conv_path.parent / kind / item_id
+                    if source.is_dir() and not target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(source), str(target))
+            if eval_dir:
+                eval_path = os.path.join(eval_dir, f"{item_id}.json")
+                if os.path.exists(eval_path):
+                    os.remove(eval_path)
+                    print(f"Removed stale evaluation cache: {eval_path}")
+            with open(checkpoint_path, "x", encoding="utf-8") as f:
+                json.dump(restored, f, ensure_ascii=False, indent=2)
+            print(f"Restored terminal model result for evaluation: {checkpoint_path}")
+        except (OSError, ValueError, TypeError) as e:
+            print(f"Could not restore terminal result for {item_id}: {e}")
 
 def _load_params_json(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -176,6 +273,7 @@ def main():
     parser.add_argument("--channel_code", default=json_defaults.get("channel_code", "ali"), help="Channel code for proxy agent (default: ali)")
     parser.add_argument("--transaction_id", default=json_defaults.get("transaction_id", "proxy_task"), help="Transaction ID for proxy agent")
     parser.add_argument("--enable_thinking", default=json_defaults.get("enable_thinking", None), help="Thinking mode: 'think' to enable thinking, 'nothink' to suppress thinking, omit for default behavior")
+    parser.add_argument("--reasoning_effort", default=json_defaults.get("reasoning_effort", None), help="Reasoning effort passed through chat_template_kwargs (for example: high or max)")
     parser.add_argument("--skills_dir", default=json_defaults.get("skills_dir"), help="Skills directory for skill_jupyter_agent (default: skills/)")
     parser.add_argument("--temperature", type=float, default=json_defaults.get("temperature", 0.0), help="Sampling temperature (default: 0.0)")
     parser.add_argument("--top_p", type=float, default=json_defaults.get("top_p", 1.0), help="Top-p sampling parameter (default: 1.0)")

@@ -9,6 +9,7 @@ import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from infer.framework import InferenceRunner
+from infer.input_workspace import TaskInputWorkspace
 
 # Import agents individually so one missing dependency doesn't block the rest
 OpenAIJupyterAgent = None
@@ -148,27 +149,30 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
     
     # 4. Run Interaction Loop
     # breakpoint()
+    input_workspace = None
     try:
-        path_info = {}
         mnt_dir_path='/mnt/data'
         mnt_dir_result_path='/mnt/result'
+        input_workspace = TaskInputWorkspace(real_file_path_list, str(task_id))
+        path_info = input_workspace.path_info()
         
         if real_file_path_list:
             file_paths_str = ", ".join([os.path.join(mnt_dir_path, os.path.basename(f)) for f in real_file_path_list])
             question = f"{question}\n\n 你所用到的文件在: {file_paths_str}"
-            first_file_dir = os.path.dirname(real_file_path_list[0])
-            path_info = {'real_input_dir': first_file_dir,
-                         'mnt_input_dir': mnt_dir_path}
+            question += "\n输入目录 /mnt/data 为只读；临时文件请写入 /mnt/work。"
 
         if picture_path:
             picture_path = os.path.join(picture_path, str(task_id))
             os.makedirs(picture_path, exist_ok=True)
             path_info['real_output_dir'] = picture_path
             path_info['mnt_output_dir'] = mnt_dir_result_path
+        path_info['task_id'] = str(task_id)
 
         output_files_str = row.get('output_file', '')
         if output_files_str:
-            file_out_paths_str = ", ".join([os.path.join(mnt_dir_result_path, os.path.basename(f)) for f in output_files_str.split('\n') if f.strip()])
+            expected_output_files = [os.path.basename(f.strip()) for f in output_files_str.split('\n') if f.strip()]
+            path_info['expected_output_files'] = expected_output_files
+            file_out_paths_str = ", ".join([os.path.join(mnt_dir_result_path, f) for f in expected_output_files])
             question = f"{question}\n\n 你的输出结果保存到: {file_out_paths_str}"
         elif picture_path:
             # If output_path is not specified in row, prompt to save to picture_path (mapped to mnt_dir_result_path)
@@ -185,6 +189,8 @@ def process_row(row: dict, agent: OpenAIJupyterAgent, prompt_path: str = None, g
     finally:
         if toolkit:
             toolkit.reset_session()
+        if input_workspace:
+            input_workspace.cleanup()
 
 
 
@@ -318,6 +324,7 @@ def run(args):
             data_root_path=agent_data_root,
             max_rounds=getattr(args, 'max_rounds', 20),
             enable_thinking=getattr(args, 'enable_thinking', None),
+            reasoning_effort=getattr(args, 'reasoning_effort', None),
             temperature=getattr(args, 'temperature', 0.0),
             top_p=getattr(args, 'top_p', 1.0)
         )

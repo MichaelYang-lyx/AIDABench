@@ -1,6 +1,12 @@
 .env
 test/
 tests/
+!tests/
+tests/*
+!tests/test_claude_subprocess_agent.py
+!tests/test_lightllm_jupyter_agent.py
+!tests/test_input_workspace.py
+!tests/test_hermes_docker_agent.py
 .venv/
 docs_2/
 some_functions/
@@ -38,7 +44,8 @@ skills/Image_Caption/
 skills/Excel_WorkFlow/
 skills_minimax/
 map/
-scripts/
+scripts/*
+!scripts/audit_input_pollution.py
 score.py
 curate-examples/
 convert_qa_to_open_ended.py
