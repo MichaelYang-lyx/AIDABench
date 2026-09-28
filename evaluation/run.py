@@ -2,12 +2,58 @@ import argparse
 import sys
 import os
 import json
+import time
+from pathlib import Path
 
 # Add project root
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+
+def _transient_judge_results(output_path):
+    """Find cached zero-score evaluations caused by a temporary judge failure."""
+    prefixes = ('error:', 'exception:',
+                'could not parse evaluation result from model response: error during api call:')
+    markers = ('connection error', 'connectionerror', 'connectionpool', 'connection reset',
+               'timed out', 'timeout', 'rate limit', 'ratelimit', '429', '502', '503',
+               '504', 'server error', 'temporarily unavailable')
+    failures = []
+    for path in Path(output_path).glob('*.json'):
+        if path.name == 'summary.json':
+            continue
+        try:
+            row = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        reasons = [row.get('reason'), row.get('eval_reason')]
+        for section in ('correctness', 'visual'):
+            value = row.get(section)
+            if isinstance(value, dict):
+                reasons.append(value.get('reason'))
+        if any(isinstance(reason, str) and reason.strip().lower().startswith(prefixes)
+               and any(marker in reason.lower() for marker in markers)
+               for reason in reasons):
+            failures.append(path)
+    return failures
+
+
+def _retry_transient_judgements(args, runner):
+    """Retry only failed judge items, waiting 20 seconds between attempts."""
+    for retry_number in (1, 2):
+        failures = _transient_judge_results(args.output_path)
+        if not failures:
+            return 0
+        archive = Path(args.output_path) / '.judge_retry' / f'attempt_{retry_number}'
+        archive.mkdir(parents=True, exist_ok=True)
+        for path in failures:
+            path.replace(archive / path.name)
+        print(f'{len(failures)} transient judge errors; retrying in 20 seconds '
+              f'(retry {retry_number}/2).', flush=True)
+        time.sleep(20)
+        runner(args)  # Native runners skip the successful cached results.
+    return len(_transient_judge_results(args.output_path))
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Entry Point for OfficeBench Evaluation")
@@ -86,6 +132,7 @@ def main():
     if "data_visualization" in dataset_lower or "chart" in dataset_lower:
         try:
             from evaluation.runner.eval_data_visualization import run as run_chart_eval
+            runner = run_chart_eval
             run_chart_eval(args)
         except ImportError as e:
             print(f"Error importing evaluation.runner.eval_data_visualization: {e}")
@@ -98,6 +145,7 @@ def main():
     elif "file" in dataset_lower:
         try:
             from evaluation.runner.eval_file_generation import run as run_file_eval
+            runner = run_file_eval
             run_file_eval(args)
         except ImportError as e:
             print(f"Error importing evaluation.runner.eval_file_generation: {e}")
@@ -110,6 +158,7 @@ def main():
     elif "qa" in dataset_lower or "numeric" in dataset_lower or "wps" in dataset_lower:
         try:
             from evaluation.runner.eval_QA import run as run_numeric_eval
+            runner = run_numeric_eval
             run_numeric_eval(args)
         except ImportError as e:
             print(f"Error importing evaluation.runner.eval_QA: {e}")
@@ -122,6 +171,7 @@ def main():
     elif "open_ended" in dataset_lower or "open" in dataset_lower:
         try:
             from evaluation.runner.eval_open_ended import run as run_open_ended_eval
+            runner = run_open_ended_eval
             run_open_ended_eval(args)
         except ImportError as e:
             print(f"Error importing evaluation.runner.eval_open_ended: {e}")
@@ -134,6 +184,8 @@ def main():
     else:
         print(f"Dataset '{dataset}' not supported for evaluation yet.")
         sys.exit(1)
+
+    unresolved_judge_errors = _retry_transient_judgements(args, runner)
 
     # Central Summary Update
     summary_file_path = os.path.join(args.output_path, "summary.json")
@@ -236,6 +288,10 @@ def main():
             
         except Exception as e:
             print(f"Error updating central summary: {e}")
+
+    if unresolved_judge_errors:
+        print(f'{unresolved_judge_errors} transient judge errors remain after two retries.')
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
